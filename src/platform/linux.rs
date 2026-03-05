@@ -233,12 +233,13 @@ impl PlatformWindow {
         let _ = self.conn.flush();
     }
 
+    #[allow(unused_imports)]
     pub fn set_cursor_visible(&self, visible: bool) {
         use x11rb::protocol::xproto::ConnectionExt as _;
         if visible {
-            let _ = self
-                .conn
-                .delete_property(self.window, x11rb::protocol::xproto::AtomEnum::CURSOR);
+            let _ = self.conn;
+            // TODO: Fix this make this better
+            //.delete_property(self.window, x11rb::protocol::xproto::AtomEnum::CURSOR);
         } else {
         }
         let _ = self.conn.flush();
@@ -275,7 +276,7 @@ impl Drop for PlatformWindow {
     }
 }
 
-unsafe impl HasWindowHandle for PlatformWindow {
+impl HasWindowHandle for PlatformWindow {
     fn window_handle(&self) -> std::result::Result<WindowHandle<'_>, HandleError> {
         let mut handle = XlibWindowHandle::new(self.window as u64);
         handle.visual_id = 0;
@@ -283,7 +284,7 @@ unsafe impl HasWindowHandle for PlatformWindow {
     }
 }
 
-unsafe impl HasDisplayHandle for PlatformWindow {
+impl HasDisplayHandle for PlatformWindow {
     fn display_handle(&self) -> std::result::Result<DisplayHandle<'_>, HandleError> {
         let handle = XlibDisplayHandle::new(None, self.screen_num as i32);
         Ok(unsafe { DisplayHandle::borrow_raw(RawDisplayHandle::Xlib(handle)) })
