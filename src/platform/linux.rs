@@ -236,11 +236,9 @@ impl PlatformWindow {
 
     #[allow(unused_imports)]
     pub fn set_cursor_visible(&self, visible: bool) {
-<<<<<<< HEAD
         let cursor = if visible { 0u32 } else { self.blank_cursor };
         let aux = ChangeWindowAttributesAux::new().cursor(cursor);
         let _ = self.conn.change_window_attributes(self.window, &aux);
-=======
         use x11rb::protocol::xproto::ConnectionExt as _;
         if visible {
             let _ = self.conn;
@@ -248,7 +246,6 @@ impl PlatformWindow {
             //.delete_property(self.window, x11rb::protocol::xproto::AtomEnum::CURSOR);
         } else {
         }
->>>>>>> 9e8adc280fb2b7247023e6a429631dc5b8411852
         let _ = self.conn.flush();
     }
 
