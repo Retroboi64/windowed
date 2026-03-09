@@ -7,6 +7,7 @@ license = "MIT"
 authors = ["Patrick Reese (Retroboi64) <https://github.com/Retroboi64>"]
 copyright = "Copyright (c) 2025 Patrick Reese (Retroboi64)"
 keywords = ["window", "windowing", "x11", "win32", "cross-platform"]
+repository = "https://github.com/Retroboi64/windowed"
 
 [dependencies]
 raw-window-handle = "0.6"
