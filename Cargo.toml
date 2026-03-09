@@ -1,6 +1,10 @@
 [package]
 name = "windowed"
+<<<<<<< HEAD
 version = "0.2.0"
+=======
+version = "0.1.1"
+>>>>>>> 9e8adc280fb2b7247023e6a429631dc5b8411852
 edition = "2024"
 description = "A minimal cross-platform windowing library for Windows and Linux (X11)"
 license = "MIT"
