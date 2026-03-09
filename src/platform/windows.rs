@@ -103,6 +103,7 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM
             LRESULT(0)
         }
 
+        #[allow(unused)]
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
             unsafe { BeginPaint(hwnd, &mut ps) };
@@ -222,6 +223,7 @@ extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM
 }
 
 impl PlatformWindow {
+    #[allow(unused)]
     pub fn new(config: &WindowConfig) -> Result<Self> {
         unsafe {
             let hinstance: HINSTANCE = GetModuleHandleW(None)
