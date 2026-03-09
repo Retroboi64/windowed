@@ -3,6 +3,7 @@ pub struct WindowConfig {
     pub title: String,
     pub width: u32,
     pub height: u32,
+    pub position: Option<(i32, i32)>,
     pub resizable: bool,
 }
 
@@ -12,6 +13,7 @@ impl WindowConfig {
             title: title.into(),
             width: 800,
             height: 600,
+            position: None,
             resizable: true,
         }
     }
@@ -24,6 +26,11 @@ impl WindowConfig {
     pub fn size(mut self, width: u32, height: u32) -> Self {
         self.width = width;
         self.height = height;
+        self
+    }
+
+    pub fn position(mut self, x: i32, y: i32) -> Self {
+        self.position = Some((x, y));
         self
     }
 

@@ -6,6 +6,8 @@ pub enum Event {
     FocusLost,
     KeyDown(Key),
     KeyUp(Key),
+    CharInput(char),
+
     MouseMove { x: i32, y: i32 },
     MouseDown { button: MouseButton, x: i32, y: i32 },
     MouseUp { button: MouseButton, x: i32, y: i32 },
@@ -57,7 +59,6 @@ pub enum Key {
     Y,
     Z,
 
-    // --- Digits (top row) ---
     Num0,
     Num1,
     Num2,

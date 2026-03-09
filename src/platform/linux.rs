@@ -15,10 +15,11 @@ use crate::error::{Error, Result};
 use crate::event::{ControlFlow, Event, Key, MouseButton};
 
 pub struct PlatformWindow {
-    pub(crate) conn: RustConnection,
-    pub(crate) window: u32,
-    pub(crate) screen_num: usize,
+    conn: RustConnection,
+    window: u32,
+    screen_num: usize,
     wm_delete_window: u32,
+    blank_cursor: u32,
     width: u32,
     height: u32,
 }
@@ -28,7 +29,7 @@ impl PlatformWindow {
         let (conn, screen_num) =
             RustConnection::connect(None).map_err(|e| Error::Platform(e.to_string()))?;
 
-        let screen = &conn.setup().roots[screen_num];
+        let screen = &conn.setup().roots[screen_num].clone();
 
         let window = conn
             .generate_id()
@@ -43,22 +44,22 @@ impl PlatformWindow {
             | EventMask::STRUCTURE_NOTIFY
             | EventMask::FOCUS_CHANGE;
 
-        let win_aux = CreateWindowAux::new()
-            .background_pixel(screen.white_pixel)
-            .event_mask(event_mask);
+        let (x, y) = config.position.unwrap_or((0, 0));
 
         conn.create_window(
             COPY_DEPTH_FROM_PARENT,
             window,
             screen.root,
-            0,
-            0,
+            x as i16,
+            y as i16,
             config.width as u16,
             config.height as u16,
             0,
             WindowClass::INPUT_OUTPUT,
             screen.root_visual,
-            &win_aux,
+            &CreateWindowAux::new()
+                .background_pixel(screen.white_pixel)
+                .event_mask(event_mask),
         )
         .map_err(|e| Error::Platform(e.to_string()))?;
 
@@ -94,14 +95,13 @@ impl PlatformWindow {
         .map_err(|e| Error::Platform(e.to_string()))?;
 
         if !config.resizable {
-            let size = config.width as i32;
-            let _ = size; // suppress lint
             set_fixed_size(&conn, window, config.width, config.height)?;
         }
 
+        let blank_cursor = create_blank_cursor(&conn, &screen)?;
+
         conn.map_window(window)
             .map_err(|e| Error::Platform(e.to_string()))?;
-
         conn.flush().map_err(|e| Error::Platform(e.to_string()))?;
 
         Ok(Self {
@@ -109,6 +109,7 @@ impl PlatformWindow {
             window,
             screen_num,
             wm_delete_window,
+            blank_cursor,
             width: config.width,
             height: config.height,
         })
@@ -130,18 +131,16 @@ impl PlatformWindow {
                 )
             };
 
-            if x_event_opt.is_none() {
+            let Some(x_event) = x_event_opt else {
                 self.request_redraw();
                 self.conn
                     .flush()
                     .map_err(|e| Error::Platform(e.to_string()))?;
                 std::thread::sleep(std::time::Duration::from_millis(1));
                 continue;
-            }
+            };
 
-            let event = self.translate_event(x_event_opt.unwrap());
-
-            if let Some(event) = event {
+            if let Some(event) = self.translate_event(x_event) {
                 match callback(event) {
                     ControlFlow::Exit => return Ok(()),
                     ControlFlow::Poll => polling = true,
@@ -186,6 +185,7 @@ impl PlatformWindow {
                     None
                 }
             }
+
             XEvent::KeyPress(e) => Some(Event::KeyDown(x11_keycode_to_key(e.detail))),
             XEvent::KeyRelease(e) => Some(Event::KeyUp(x11_keycode_to_key(e.detail))),
 
@@ -198,6 +198,7 @@ impl PlatformWindow {
                     y: e.event_y as i32,
                 }),
             },
+
             XEvent::ButtonRelease(e) => x11_button(e.detail).map(|button| Event::MouseUp {
                 button,
                 x: e.event_x as i32,
@@ -234,13 +235,9 @@ impl PlatformWindow {
     }
 
     pub fn set_cursor_visible(&self, visible: bool) {
-        use x11rb::protocol::xproto::ConnectionExt as _;
-        if visible {
-            let _ = self
-                .conn
-                .delete_property(self.window, x11rb::protocol::xproto::AtomEnum::CURSOR);
-        } else {
-        }
+        let cursor = if visible { 0u32 } else { self.blank_cursor };
+        let aux = ChangeWindowAttributesAux::new().cursor(cursor);
+        let _ = self.conn.change_window_attributes(self.window, &aux);
         let _ = self.conn.flush();
     }
 
@@ -270,6 +267,7 @@ impl PlatformWindow {
 
 impl Drop for PlatformWindow {
     fn drop(&mut self) {
+        let _ = self.conn.free_cursor(self.blank_cursor);
         let _ = self.conn.destroy_window(self.window);
         let _ = self.conn.flush();
     }
@@ -298,11 +296,51 @@ fn intern_atom(conn: &RustConnection, name: &[u8]) -> Result<u32> {
         .map_err(|e| Error::Platform(e.to_string()))
 }
 
+fn create_blank_cursor(conn: &RustConnection, screen: &Screen) -> Result<u32> {
+    let pixmap = conn
+        .generate_id()
+        .map_err(|e| Error::Platform(e.to_string()))?;
+    conn.create_pixmap(1, pixmap, screen.root, 1, 1)
+        .map_err(|e| Error::Platform(e.to_string()))?;
+
+    let gc = conn
+        .generate_id()
+        .map_err(|e| Error::Platform(e.to_string()))?;
+    conn.create_gc(gc, pixmap, &CreateGCAux::new().foreground(0))
+        .map_err(|e| Error::Platform(e.to_string()))?;
+    conn.poly_fill_rectangle(
+        pixmap,
+        gc,
+        &[Rectangle {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        }],
+    )
+    .map_err(|e| Error::Platform(e.to_string()))?;
+    conn.free_gc(gc)
+        .map_err(|e| Error::Platform(e.to_string()))?;
+
+    let cursor = conn
+        .generate_id()
+        .map_err(|e| Error::Platform(e.to_string()))?;
+    conn.create_cursor(cursor, pixmap, pixmap, 0, 0, 0, 0, 0, 0, 0, 0)
+        .map_err(|e| Error::Platform(e.to_string()))?;
+
+    conn.free_pixmap(pixmap)
+        .map_err(|e| Error::Platform(e.to_string()))?;
+
+    Ok(cursor)
+}
+
 fn set_fixed_size(conn: &RustConnection, window: u32, width: u32, height: u32) -> Result<()> {
     let flags: u32 = 0x30;
-    let w = width as u32;
-    let h = height as u32;
-    let hints: [u32; 18] = [flags, 0, 0, 0, 0, 0, w, h, w, h, 0, 0, 0, 0, 0, 0, 0, 0];
+    let hints: [u32; 18] = [
+        flags, 0, 0, 0, 0, 0, width, height, // min size
+        width, height, // max size
+        0, 0, 0, 0, 0, 0, 0, 0,
+    ];
     conn.change_property32(
         PropMode::REPLACE,
         window,
