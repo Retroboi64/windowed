@@ -11,9 +11,12 @@ repository = "https://github.com/Retroboi64/windowed"
 
 [dependencies]
 raw-window-handle = "0.6"
+gl = "0.14.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# TODO: Remove this one when we move all impl to x11
 x11rb = { version = "0.13", features = ["allow-unsafe-code"] }
+x11 = { version = "2", features = ["xlib"] }
 
 # Microsoft's official Windows bindings crate (replaces the unmaintained winapi crate).
 # https://github.com/microsoft/windows-rs

@@ -10,9 +10,20 @@ use raw_window_handle::{
     RawWindowHandle, WindowHandle, XlibDisplayHandle, XlibWindowHandle,
 };
 
+use std::ffi::c_void;
+use std::ptr::NonNull;
+
 use crate::config::WindowConfig;
 use crate::error::{Error, Result};
 use crate::event::{ControlFlow, Event, Key, MouseButton};
+
+// We need a real Xlib Display* for GLX.  x11rb never creates one, so we open
+// our own connection via XOpenDisplay and keep it alive for the window's lifetime.
+#[link(name = "X11")]
+unsafe extern "C" {
+    fn XOpenDisplay(name: *const i8) -> *mut c_void;
+    fn XCloseDisplay(display: *mut c_void);
+}
 
 pub struct PlatformWindow {
     conn: RustConnection,
@@ -22,10 +33,23 @@ pub struct PlatformWindow {
     blank_cursor: u32,
     width: u32,
     height: u32,
+    /// Real Xlib Display* — kept alive so GLX can use it.
+    xlib_display: *mut c_void,
 }
+
+// SAFETY: we never share the display pointer across threads.
+unsafe impl Send for PlatformWindow {}
 
 impl PlatformWindow {
     pub fn new(config: &WindowConfig) -> Result<Self> {
+        // Open a real Xlib connection so GLX has a Display* to work with.
+        let xlib_display = unsafe { XOpenDisplay(std::ptr::null()) };
+        if xlib_display.is_null() {
+            return Err(Error::Platform(
+                "XOpenDisplay failed — is $DISPLAY set?".into(),
+            ));
+        }
+
         let (conn, screen_num) =
             RustConnection::connect(None).map_err(|e| Error::Platform(e.to_string()))?;
 
@@ -98,7 +122,7 @@ impl PlatformWindow {
             set_fixed_size(&conn, window, config.width, config.height)?;
         }
 
-        let blank_cursor = create_blank_cursor(&conn, &screen)?;
+        let blank_cursor = create_blank_cursor(&conn, screen)?;
 
         conn.map_window(window)
             .map_err(|e| Error::Platform(e.to_string()))?;
@@ -112,49 +136,41 @@ impl PlatformWindow {
             blank_cursor,
             width: config.width,
             height: config.height,
+            xlib_display,
         })
     }
 
     pub fn run<F: FnMut(Event) -> ControlFlow>(&mut self, mut callback: F) -> Result<()> {
-        let mut polling = false;
-
         loop {
-            let x_event_opt = if polling {
-                self.conn
+            // Drain every pending X event without blocking.
+            loop {
+                let ev = self
+                    .conn
                     .poll_for_event()
-                    .map_err(|e| Error::Platform(e.to_string()))?
-            } else {
-                Some(
-                    self.conn
-                        .wait_for_event()
-                        .map_err(|e| Error::Platform(e.to_string()))?,
-                )
-            };
-
-            let Some(x_event) = x_event_opt else {
-                self.request_redraw();
-                self.conn
-                    .flush()
                     .map_err(|e| Error::Platform(e.to_string()))?;
-                std::thread::sleep(std::time::Duration::from_millis(1));
-                continue;
-            };
 
-            if let Some(event) = self.translate_event(x_event) {
-                match callback(event) {
-                    ControlFlow::Exit => return Ok(()),
-                    ControlFlow::Poll => polling = true,
-                    ControlFlow::WarpAndPoll(x, y) => {
-                        polling = true;
-                        self.warp_mouse(x, y);
+                let Some(x_event) = ev else { break };
+
+                if let Some(event) = self.translate_event(x_event) {
+                    if matches!(callback(event), ControlFlow::Exit) {
+                        return Ok(());
                     }
-                    ControlFlow::Continue => {}
                 }
+            }
+
+            // After draining events, always request a redraw.
+            // This gives the app a chance to render every iteration regardless
+            // of whether any X events arrived — required for a GL render loop.
+            if matches!(callback(Event::RedrawRequested), ControlFlow::Exit) {
+                return Ok(());
             }
 
             self.conn
                 .flush()
                 .map_err(|e| Error::Platform(e.to_string()))?;
+
+            // Yield briefly so we don't burn 100% CPU when idle.
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
 
@@ -168,7 +184,7 @@ impl PlatformWindow {
                 }
             }
 
-            XEvent::Expose(e) if e.count == 0 => Some(Event::RedrawRequested),
+            // Expose is now ignored — the run loop drives redraws directly.
             XEvent::Expose(_) => None,
 
             XEvent::ConfigureNotify(e) => {
@@ -239,13 +255,6 @@ impl PlatformWindow {
         let cursor = if visible { 0u32 } else { self.blank_cursor };
         let aux = ChangeWindowAttributesAux::new().cursor(cursor);
         let _ = self.conn.change_window_attributes(self.window, &aux);
-        use x11rb::protocol::xproto::ConnectionExt as _;
-        if visible {
-            let _ = self.conn;
-            // TODO: Fix this make this better
-            //.delete_property(self.window, x11rb::protocol::xproto::AtomEnum::CURSOR);
-        } else {
-        }
         let _ = self.conn.flush();
     }
 
@@ -278,6 +287,9 @@ impl Drop for PlatformWindow {
         let _ = self.conn.free_cursor(self.blank_cursor);
         let _ = self.conn.destroy_window(self.window);
         let _ = self.conn.flush();
+        if !self.xlib_display.is_null() {
+            unsafe { XCloseDisplay(self.xlib_display) };
+        }
     }
 }
 
@@ -291,10 +303,16 @@ impl HasWindowHandle for PlatformWindow {
 
 impl HasDisplayHandle for PlatformWindow {
     fn display_handle(&self) -> std::result::Result<DisplayHandle<'_>, HandleError> {
-        let handle = XlibDisplayHandle::new(None, self.screen_num as i32);
+        // Provide the real Xlib Display* so GLX (and anything else that needs
+        // it) can use it without falling back to XOpenDisplay.
+        let ptr = NonNull::new(self.xlib_display)
+            .expect("xlib_display is null — XOpenDisplay must have failed");
+        let handle = XlibDisplayHandle::new(Some(ptr), self.screen_num as i32);
         Ok(unsafe { DisplayHandle::borrow_raw(RawDisplayHandle::Xlib(handle)) })
     }
 }
+
+// ── helpers ────────────────────────────────────────────────────────────────
 
 fn intern_atom(conn: &RustConnection, name: &[u8]) -> Result<u32> {
     conn.intern_atom(false, name)
@@ -335,7 +353,6 @@ fn create_blank_cursor(conn: &RustConnection, screen: &Screen) -> Result<u32> {
         .map_err(|e| Error::Platform(e.to_string()))?;
     conn.create_cursor(cursor, pixmap, pixmap, 0, 0, 0, 0, 0, 0, 0, 0)
         .map_err(|e| Error::Platform(e.to_string()))?;
-
     conn.free_pixmap(pixmap)
         .map_err(|e| Error::Platform(e.to_string()))?;
 
@@ -345,9 +362,7 @@ fn create_blank_cursor(conn: &RustConnection, screen: &Screen) -> Result<u32> {
 fn set_fixed_size(conn: &RustConnection, window: u32, width: u32, height: u32) -> Result<()> {
     let flags: u32 = 0x30;
     let hints: [u32; 18] = [
-        flags, 0, 0, 0, 0, 0, width, height, // min size
-        width, height, // max size
-        0, 0, 0, 0, 0, 0, 0, 0,
+        flags, 0, 0, 0, 0, 0, width, height, width, height, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
     conn.change_property32(
         PropMode::REPLACE,

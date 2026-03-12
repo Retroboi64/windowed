@@ -1,11 +1,100 @@
-use raw_window_handle::{
-    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
-};
-
 use crate::config::WindowConfig;
 use crate::error::Result;
 use crate::event::{ControlFlow, Event};
 use crate::platform::PlatformWindow;
+use raw_window_handle::{
+    DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
+    RawWindowHandle, WindowHandle,
+};
+use std::ffi::{CString, c_void};
+
+#[cfg(target_os = "windows")]
+mod win_gl {
+    use std::ffi::c_void;
+
+    #[link(name = "opengl32")]
+    unsafe extern "system" {
+        pub fn wglGetProcAddress(name: *const i8) -> *const c_void;
+        pub fn wglGetCurrentContext() -> *mut c_void;
+        pub fn wglCreateContext(hdc: *mut c_void) -> *mut c_void;
+        pub fn wglMakeCurrent(hdc: *mut c_void, hglrc: *mut c_void) -> i32;
+    }
+
+    #[link(name = "gdi32")]
+    unsafe extern "system" {
+        pub fn GetDC(hwnd: *mut c_void) -> *mut c_void;
+        pub fn ChoosePixelFormat(hdc: *mut c_void, ppfd: *const PIXELFORMATDESCRIPTOR) -> i32;
+        pub fn SetPixelFormat(
+            hdc: *mut c_void,
+            format: i32,
+            ppfd: *const PIXELFORMATDESCRIPTOR,
+        ) -> i32;
+    }
+
+    #[repr(C)]
+    pub struct PIXELFORMATDESCRIPTOR {
+        pub n_size: u16,
+        pub n_version: u16,
+        pub dw_flags: u32,
+        pub i_pixel_type: u8,
+        pub c_color_bits: u8,
+        pub c_red_bits: u8,
+        pub c_red_shift: u8,
+        pub c_green_bits: u8,
+        pub c_green_shift: u8,
+        pub c_blue_bits: u8,
+        pub c_blue_shift: u8,
+        pub c_alpha_bits: u8,
+        pub c_alpha_shift: u8,
+        pub c_accum_bits: u8,
+        pub c_accum_red_bits: u8,
+        pub c_accum_green_bits: u8,
+        pub c_accum_blue_bits: u8,
+        pub c_accum_alpha_bits: u8,
+        pub c_depth_bits: u8,
+        pub c_stencil_bits: u8,
+        pub c_aux_buffers: u8,
+        pub i_layer_type: u8,
+        pub b_reserved: u8,
+        pub dw_layer_mask: u32,
+        pub dw_visible_mask: u32,
+        pub dw_damage_mask: u32,
+    }
+
+    pub const PFD_DRAW_TO_WINDOW: u32 = 0x00000004;
+    pub const PFD_SUPPORT_OPENGL: u32 = 0x00000020;
+    pub const PFD_DOUBLEBUFFER: u32 = 0x00000001;
+    pub const PFD_TYPE_RGBA: u8 = 0;
+    pub const PFD_MAIN_PLANE: u8 = 0;
+}
+
+#[cfg(target_os = "linux")]
+mod glx {
+    use std::ffi::c_void;
+
+    #[link(name = "GL")]
+    unsafe extern "C" {
+        pub fn glXGetProcAddress(name: *const u8) -> *const c_void;
+        pub fn glXGetCurrentContext() -> *mut c_void;
+        pub fn glXChooseVisual(
+            display: *mut c_void,
+            screen: i32,
+            attrib_list: *const i32,
+        ) -> *mut c_void;
+        pub fn glXCreateContext(
+            display: *mut c_void,
+            visual: *mut c_void,
+            share_list: *mut c_void,
+            direct: i32,
+        ) -> *mut c_void;
+        pub fn glXMakeCurrent(display: *mut c_void, drawable: u64, ctx: *mut c_void) -> i32;
+    }
+
+    #[link(name = "X11")]
+    unsafe extern "C" {
+        pub fn XOpenDisplay(display_name: *const i8) -> *mut c_void;
+    }
+}
 
 pub struct Window {
     inner: PlatformWindow,
@@ -40,6 +129,173 @@ impl Window {
 
     pub fn inner_size(&self) -> (u32, u32) {
         self.inner.inner_size()
+    }
+
+    // We will move all this after we make a OpenGL crate
+    pub unsafe fn create_gl_context(&self) {
+        #[cfg(target_os = "linux")]
+        unsafe {
+            self.create_gl_context_linux()
+        };
+
+        #[cfg(target_os = "windows")]
+        self.create_gl_context_windows();
+    }
+
+    #[cfg(target_os = "linux")]
+    unsafe fn create_gl_context_linux(&self) {
+        use glx::*;
+
+        let display: *mut c_void = {
+            let raw = self
+                .display_handle()
+                .expect("failed to acquire display handle")
+                .as_raw();
+
+            match raw {
+                RawDisplayHandle::Xlib(h) => match h.display {
+                    Some(ptr) => ptr.as_ptr() as *mut c_void,
+                    None => {
+                        eprintln!(
+                            "[windowed] XlibDisplayHandle.display is None/null; \
+                             falling back to XOpenDisplay(NULL) ($DISPLAY)"
+                        );
+                        let d = unsafe { XOpenDisplay(std::ptr::null()) };
+                        assert!(!d.is_null(), "XOpenDisplay(NULL) failed — is $DISPLAY set?");
+                        d
+                    }
+                },
+                other => panic!("create_gl_context requires an Xlib display handle, got {other:?}"),
+            }
+        };
+
+        let xid: u64 = match self
+            .window_handle()
+            .expect("failed to acquire window handle")
+            .as_raw()
+        {
+            RawWindowHandle::Xlib(h) => h.window,
+            other => panic!("create_gl_context requires an Xlib window handle, got {other:?}"),
+        };
+
+        assert!(xid != 0, "XlibWindowHandle.window XID is 0");
+
+        let attribs: [i32; 5] = [4, 5, 12, 24, 0];
+        let visual = unsafe { glXChooseVisual(display, 0, attribs.as_ptr()) };
+        assert!(
+            !visual.is_null(),
+            "glXChooseVisual failed — check GLX support"
+        );
+
+        let ctx = unsafe {
+            glXCreateContext(display, visual, std::ptr::null_mut(), 1 /* GL_TRUE */)
+        };
+        assert!(!ctx.is_null(), "glXCreateContext failed");
+
+        let ok = unsafe { glXMakeCurrent(display, xid, ctx) };
+        assert!(ok != 0, "glXMakeCurrent failed");
+    }
+
+    #[cfg(target_os = "windows")]
+    unsafe fn create_gl_context_windows(&self) {
+        use win_gl::*;
+
+        let hwnd = match self
+            .window_handle()
+            .expect("failed to acquire window handle")
+            .as_raw()
+        {
+            RawWindowHandle::Win32(w) => w.hwnd.get() as *mut c_void,
+            other => panic!("create_gl_context requires a Win32 window handle, got {other:?}"),
+        };
+
+        let hdc = GetDC(hwnd);
+        assert!(!hdc.is_null(), "GetDC failed");
+
+        let pfd = PIXELFORMATDESCRIPTOR {
+            n_size: std::mem::size_of::<PIXELFORMATDESCRIPTOR>() as u16,
+            n_version: 1,
+            dw_flags: PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER,
+            i_pixel_type: PFD_TYPE_RGBA,
+            c_color_bits: 32,
+            c_red_bits: 0,
+            c_red_shift: 0,
+            c_green_bits: 0,
+            c_green_shift: 0,
+            c_blue_bits: 0,
+            c_blue_shift: 0,
+            c_alpha_bits: 8,
+            c_alpha_shift: 0,
+            c_accum_bits: 0,
+            c_accum_red_bits: 0,
+            c_accum_green_bits: 0,
+            c_accum_blue_bits: 0,
+            c_accum_alpha_bits: 0,
+            c_depth_bits: 24,
+            c_stencil_bits: 8,
+            c_aux_buffers: 0,
+            i_layer_type: PFD_MAIN_PLANE,
+            b_reserved: 0,
+            dw_layer_mask: 0,
+            dw_visible_mask: 0,
+            dw_damage_mask: 0,
+        };
+
+        let fmt = ChoosePixelFormat(hdc, &pfd);
+        assert!(fmt != 0, "ChoosePixelFormat failed");
+
+        let ok = SetPixelFormat(hdc, fmt, &pfd);
+        assert!(ok != 0, "SetPixelFormat failed");
+
+        let hglrc = wglCreateContext(hdc);
+        assert!(!hglrc.is_null(), "wglCreateContext failed");
+
+        let ok = wglMakeCurrent(hdc, hglrc);
+        assert!(ok != 0, "wglMakeCurrent failed");
+    }
+
+    pub fn get_proc_address(&self, name: &str) -> *const c_void {
+        let cname = CString::new(name).expect("function name contained a null byte");
+
+        #[cfg(target_os = "linux")]
+        unsafe {
+            glx::glXGetProcAddress(cname.as_ptr() as *const u8)
+        }
+
+        #[cfg(target_os = "windows")]
+        unsafe {
+            win_gl::wglGetProcAddress(cname.as_ptr())
+        }
+    }
+
+    pub fn test_gl(&self) {
+        #[cfg(target_os = "linux")]
+        {
+            let ctx = unsafe { glx::glXGetCurrentContext() };
+            if ctx.is_null() {
+                println!("No OpenGL context (glXGetCurrentContext returned null)");
+            } else {
+                println!("OpenGL context active (GLX)");
+            }
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let ctx = unsafe { win_gl::wglGetCurrentContext() };
+            if ctx.is_null() {
+                println!("No OpenGL context (wglGetCurrentContext returned null)");
+            } else {
+                println!("OpenGL context active (WGL)");
+            }
+        }
+
+        let version = unsafe { gl::GetString(gl::VERSION) };
+        if version.is_null() {
+            println!("gl::GetString(VERSION) returned null — context may not be current");
+        } else {
+            let s = unsafe { std::ffi::CStr::from_ptr(version as *const i8) };
+            println!("OpenGL version: {}", s.to_string_lossy());
+        }
     }
 }
 
