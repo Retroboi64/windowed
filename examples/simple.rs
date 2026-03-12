@@ -44,35 +44,39 @@ unsafe extern "system" {
     fn GetDC(hwnd: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
 }
 
-unsafe fn compile_shader(src: &[u8], kind: gl::types::GLenum) -> u32 {
-    let shader = gl::CreateShader(kind);
+fn compile_shader(src: &[u8], kind: gl::types::GLenum) -> u32 {
+    let shader = unsafe { gl::CreateShader(kind) };
     let ptr = src.as_ptr().cast::<i8>();
-    gl::ShaderSource(shader, 1, &ptr, std::ptr::null());
-    gl::CompileShader(shader);
+    unsafe { gl::ShaderSource(shader, 1, &ptr, std::ptr::null()) };
+    unsafe { gl::CompileShader(shader) };
     let mut ok = 0i32;
-    gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut ok);
+    unsafe { gl::GetShaderiv(shader, gl::COMPILE_STATUS, &mut ok) };
     if ok == 0 {
         let mut len = 0i32;
-        gl::GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut len);
+        unsafe { gl::GetShaderiv(shader, gl::INFO_LOG_LENGTH, &mut len) };
         let mut buf = vec![0u8; len as usize];
-        gl::GetShaderInfoLog(shader, len, std::ptr::null_mut(), buf.as_mut_ptr().cast());
+        unsafe { gl::GetShaderInfoLog(shader, len, std::ptr::null_mut(), buf.as_mut_ptr().cast()) };
         panic!("shader compile error: {}", String::from_utf8_lossy(&buf));
     }
     shader
 }
 
-unsafe fn link_program(vert: u32, frag: u32) -> u32 {
-    let program = gl::CreateProgram();
-    gl::AttachShader(program, vert);
-    gl::AttachShader(program, frag);
-    gl::LinkProgram(program);
+fn link_program(vert: u32, frag: u32) -> u32 {
+    let program = unsafe { gl::CreateProgram() };
+    unsafe {
+        gl::AttachShader(program, vert);
+        gl::AttachShader(program, frag);
+        gl::LinkProgram(program);
+    }
     let mut ok = 0i32;
-    gl::GetProgramiv(program, gl::LINK_STATUS, &mut ok);
+    unsafe { gl::GetProgramiv(program, gl::LINK_STATUS, &mut ok) };
     if ok == 0 {
         let mut len = 0i32;
-        gl::GetProgramiv(program, gl::INFO_LOG_LENGTH, &mut len);
+        unsafe { gl::GetProgramiv(program, gl::INFO_LOG_LENGTH, &mut len) };
         let mut buf = vec![0u8; len as usize];
-        gl::GetProgramInfoLog(program, len, std::ptr::null_mut(), buf.as_mut_ptr().cast());
+        unsafe {
+            gl::GetProgramInfoLog(program, len, std::ptr::null_mut(), buf.as_mut_ptr().cast())
+        };
         panic!("program link error: {}", String::from_utf8_lossy(&buf));
     }
     program
