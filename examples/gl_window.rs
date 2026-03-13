@@ -1,9 +1,9 @@
-//! Simple example: renders an orange triangle.
+//! Simple example: Opens a window with opengl and than renders an orange triangle.
 //!
 //! Press Escape or close the window to quit.
 //!
 //! Run with:
-//!   cargo run --example simple
+//!   cargo run --example gl_window
 
 use gl::{FRAGMENT_SHADER, VERTEX_SHADER};
 use windowed::{ControlFlow, Event, Key, Window, WindowConfig};
