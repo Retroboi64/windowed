@@ -11,7 +11,7 @@ repository = "https://github.com/Retroboi64/windowed"
 
 [dependencies]
 raw-window-handle = "0.6"
-gl = "0.14.0"
+gl = { version = "0.14.0", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # TODO: Remove this one when we move all impl to x11
@@ -28,6 +28,15 @@ windows = { version = "0.58", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[features]
+default = []
+opengl = ["gl"]
+
+[[example]]
+name = "gl_window"
+path = "examples/gl_window.rs"
+required-features = ["opengl"]
 
 [profile.release]
 opt-level = "z"

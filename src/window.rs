@@ -2,13 +2,19 @@ use crate::config::WindowConfig;
 use crate::error::Result;
 use crate::event::{ControlFlow, Event};
 use crate::platform::PlatformWindow;
+
+#[allow(unused_imports)]
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle,
 };
+
+#[allow(unused_imports)]
 use std::ffi::{CString, c_void};
 
-#[cfg(target_os = "windows")]
+// ── Platform GL bindings — only compiled when the opengl feature is enabled ──
+
+#[cfg(all(feature = "opengl", target_os = "windows"))]
 mod win_gl {
     use std::ffi::c_void;
 
@@ -68,7 +74,7 @@ mod win_gl {
     pub const PFD_MAIN_PLANE: u8 = 0;
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "opengl", target_os = "linux"))]
 mod glx {
     use std::ffi::c_void;
 
@@ -95,6 +101,8 @@ mod glx {
         pub fn XOpenDisplay(display_name: *const i8) -> *mut c_void;
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 pub struct Window {
     inner: PlatformWindow,
@@ -131,7 +139,20 @@ impl Window {
         self.inner.inner_size()
     }
 
-    // We will move all this after we make a OpenGL crate
+    // ── OpenGL support ────────────────────────────────────────────────────────
+    //
+    // All three methods below are only present when `features = ["opengl"]`.
+    // `get_proc_address` is the one callers need most — it drives `gl::load_with`.
+    // `create_gl_context` and `test_gl` are convenience helpers on top of it.
+
+    /// Create and make-current an OpenGL context for this window.
+    ///
+    /// Call this once, before `gl::load_with`, e.g.:
+    /// ```ignore
+    /// unsafe { window.create_gl_context() };
+    /// gl::load_with(|s| window.get_proc_address(s) as *const _);
+    /// ```
+    #[cfg(feature = "opengl")]
     pub unsafe fn create_gl_context(&self) {
         #[cfg(target_os = "linux")]
         unsafe {
@@ -139,10 +160,12 @@ impl Window {
         };
 
         #[cfg(target_os = "windows")]
-        self.create_gl_context_windows();
+        unsafe {
+            self.create_gl_context_windows()
+        };
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(all(feature = "opengl", target_os = "linux"))]
     unsafe fn create_gl_context_linux(&self) {
         use glx::*;
 
@@ -157,7 +180,7 @@ impl Window {
                     Some(ptr) => ptr.as_ptr() as *mut c_void,
                     None => {
                         eprintln!(
-                            "[windowed] XlibDisplayHandle.display is None/null; \
+                            "[windowed] XlibDisplayHandle.display is None — \
                              falling back to XOpenDisplay(NULL) ($DISPLAY)"
                         );
                         let d = unsafe { XOpenDisplay(std::ptr::null()) };
@@ -180,6 +203,7 @@ impl Window {
 
         assert!(xid != 0, "XlibWindowHandle.window XID is 0");
 
+        // GLX_RGBA=4, GLX_DEPTH_SIZE=12 with value 24, None terminator
         let attribs: [i32; 5] = [4, 5, 12, 24, 0];
         let visual = unsafe { glXChooseVisual(display, 0, attribs.as_ptr()) };
         assert!(
@@ -196,7 +220,7 @@ impl Window {
         assert!(ok != 0, "glXMakeCurrent failed");
     }
 
-    #[cfg(target_os = "windows")]
+    #[cfg(all(feature = "opengl", target_os = "windows"))]
     unsafe fn create_gl_context_windows(&self) {
         use win_gl::*;
 
@@ -254,8 +278,19 @@ impl Window {
         assert!(ok != 0, "wglMakeCurrent failed");
     }
 
+    /// Resolve an OpenGL function pointer by name.
+    ///
+    /// This is the only thing `gl::load_with` needs:
+    /// ```ignore
+    /// gl::load_with(|s| window.get_proc_address(s) as *const _);
+    /// ```
+    ///
+    /// Available whenever the `opengl` feature is enabled, even before (or
+    /// without) calling `create_gl_context` — useful if the caller manages the
+    /// context itself (e.g. via WGL extensions or EGL).
+    #[cfg(feature = "opengl")]
     pub fn get_proc_address(&self, name: &str) -> *const c_void {
-        let cname = CString::new(name).expect("function name contained a null byte");
+        let cname = CString::new(name).expect("GL function name contained a null byte");
 
         #[cfg(target_os = "linux")]
         unsafe {
@@ -268,14 +303,17 @@ impl Window {
         }
     }
 
+    /// Print the active OpenGL context and version string to stdout.
+    /// Useful as a quick smoke-test after `create_gl_context`.
+    #[cfg(feature = "opengl")]
     pub fn test_gl(&self) {
         #[cfg(target_os = "linux")]
         {
             let ctx = unsafe { glx::glXGetCurrentContext() };
             if ctx.is_null() {
-                println!("No OpenGL context (glXGetCurrentContext returned null)");
+                println!("[windowed] No OpenGL context (glXGetCurrentContext returned null)");
             } else {
-                println!("OpenGL context active (GLX)");
+                println!("[windowed] OpenGL context active (GLX): {ctx:p}");
             }
         }
 
@@ -283,18 +321,20 @@ impl Window {
         {
             let ctx = unsafe { win_gl::wglGetCurrentContext() };
             if ctx.is_null() {
-                println!("No OpenGL context (wglGetCurrentContext returned null)");
+                println!("[windowed] No OpenGL context (wglGetCurrentContext returned null)");
             } else {
-                println!("OpenGL context active (WGL)");
+                println!("[windowed] OpenGL context active (WGL): {ctx:p}");
             }
         }
 
         let version = unsafe { gl::GetString(gl::VERSION) };
         if version.is_null() {
-            println!("gl::GetString(VERSION) returned null — context may not be current");
+            println!(
+                "[windowed] gl::GetString(VERSION) returned null — context may not be current"
+            );
         } else {
             let s = unsafe { std::ffi::CStr::from_ptr(version as *const i8) };
-            println!("OpenGL version: {}", s.to_string_lossy());
+            println!("[windowed] OpenGL version: {}", s.to_string_lossy());
         }
     }
 }
