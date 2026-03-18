@@ -8,13 +8,9 @@ use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle,
 };
-
-#[allow(unused_imports)]
 use std::ffi::{CString, c_void};
 
-// ── Platform GL bindings — only compiled when the opengl feature is enabled ──
-
-#[cfg(all(feature = "opengl", target_os = "windows"))]
+#[cfg(target_os = "windows")]
 mod win_gl {
     use std::ffi::c_void;
 
@@ -74,7 +70,7 @@ mod win_gl {
     pub const PFD_MAIN_PLANE: u8 = 0;
 }
 
-#[cfg(all(feature = "opengl", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 mod glx {
     use std::ffi::c_void;
 
@@ -101,8 +97,6 @@ mod glx {
         pub fn XOpenDisplay(display_name: *const i8) -> *mut c_void;
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 pub struct Window {
     inner: PlatformWindow,
@@ -139,20 +133,6 @@ impl Window {
         self.inner.inner_size()
     }
 
-    // ── OpenGL support ────────────────────────────────────────────────────────
-    //
-    // All three methods below are only present when `features = ["opengl"]`.
-    // `get_proc_address` is the one callers need most — it drives `gl::load_with`.
-    // `create_gl_context` and `test_gl` are convenience helpers on top of it.
-
-    /// Create and make-current an OpenGL context for this window.
-    ///
-    /// Call this once, before `gl::load_with`, e.g.:
-    /// ```ignore
-    /// unsafe { window.create_gl_context() };
-    /// gl::load_with(|s| window.get_proc_address(s) as *const _);
-    /// ```
-    #[cfg(feature = "opengl")]
     pub unsafe fn create_gl_context(&self) {
         #[cfg(target_os = "linux")]
         unsafe {
@@ -165,7 +145,7 @@ impl Window {
         };
     }
 
-    #[cfg(all(feature = "opengl", target_os = "linux"))]
+    #[cfg(target_os = "linux")]
     unsafe fn create_gl_context_linux(&self) {
         use glx::*;
 
@@ -220,7 +200,7 @@ impl Window {
         assert!(ok != 0, "glXMakeCurrent failed");
     }
 
-    #[cfg(all(feature = "opengl", target_os = "windows"))]
+    #[cfg(target_os = "windows")]
     unsafe fn create_gl_context_windows(&self) {
         use win_gl::*;
 
@@ -280,15 +260,10 @@ impl Window {
 
     /// Resolve an OpenGL function pointer by name.
     ///
-    /// This is the only thing `gl::load_with` needs:
+    /// Pass this directly to any GL loader:
     /// ```ignore
     /// gl::load_with(|s| window.get_proc_address(s) as *const _);
     /// ```
-    ///
-    /// Available whenever the `opengl` feature is enabled, even before (or
-    /// without) calling `create_gl_context` — useful if the caller manages the
-    /// context itself (e.g. via WGL extensions or EGL).
-    #[cfg(feature = "opengl")]
     pub fn get_proc_address(&self, name: &str) -> *const c_void {
         let cname = CString::new(name).expect("GL function name contained a null byte");
 
@@ -303,9 +278,8 @@ impl Window {
         }
     }
 
-    /// Print the active OpenGL context and version string to stdout.
-    /// Useful as a quick smoke-test after `create_gl_context`.
-    #[cfg(feature = "opengl")]
+    /// Print the active GL context handle and version string — quick smoke-test.
+    /// Does not require the `gl` crate; resolves `glGetString` via `get_proc_address`.
     pub fn test_gl(&self) {
         #[cfg(target_os = "linux")]
         {
@@ -327,10 +301,22 @@ impl Window {
             }
         }
 
-        let version = unsafe { gl::GetString(gl::VERSION) };
+        // Resolve glGetString without depending on the gl crate.
+        type GlGetString = unsafe extern "C" fn(name: u32) -> *const u8;
+        let get_string: GlGetString = unsafe {
+            let ptr = self.get_proc_address("glGetString");
+            if ptr.is_null() {
+                println!("[windowed] glGetString not found — context may not be current");
+                return;
+            }
+            std::mem::transmute(ptr)
+        };
+
+        // GL_VERSION = 0x1F02
+        let version = unsafe { get_string(0x1F02) };
         if version.is_null() {
             println!(
-                "[windowed] gl::GetString(VERSION) returned null — context may not be current"
+                "[windowed] glGetString(GL_VERSION) returned null — context may not be current"
             );
         } else {
             let s = unsafe { std::ffi::CStr::from_ptr(version as *const i8) };

@@ -1,6 +1,6 @@
 [package]
 name = "windowed"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 description = "A minimal cross-platform windowing library for Windows and Linux (X11)"
 license = "MIT"
@@ -36,7 +36,7 @@ opengl = ["gl"]
 [[example]]
 name = "gl_window"
 path = "examples/gl_window.rs"
-required-features = ["opengl"]
+required-features = ["gl"]
 
 [profile.release]
 opt-level = "z"
