@@ -6,7 +6,7 @@ description = "A minimal, zero-dependency and cross-platform windowing library f
 license = "MIT"
 authors = ["Patrick Reese (Retroboi64) <https://github.com/Retroboi64>"]
 copyright = "Copyright (c) 2025 Patrick Reese (Retroboi64)"
-keywords = ["window", "windowing", "x11", "win32", "cross-platform", "zero-dependency"]
+keywords = ["window", "windowing", "x11", "win32", "zero-dependency"]
 repository = "https://github.com/Retroboi64/windowed"
 
 [dependencies]
