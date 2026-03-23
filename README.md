@@ -10,8 +10,8 @@ No GPU context, no retained scene graph — just a window, an event loop, and ra
 
 | OS | Backend |
 |---|---|
-| Windows 10 / 11 | Win32 via [`windows`](https://crates.io/crates/windows) (Microsoft's official crate) |
-| Linux | X11 via [`x11rb`](https://crates.io/crates/x11rb) |
+| Windows 10 / 11 | Win32 |
+| Linux | X11|
 | macOS | ❌ Not yet implemented |
 
 ---
@@ -123,8 +123,6 @@ window.warp_mouse(x, y);            // move cursor to window-local coordinates
 | Crate | Used on |
 |---|---|
 | [`raw-window-handle`](https://crates.io/crates/raw-window-handle) | All platforms |
-| [`windows`](https://crates.io/crates/windows) | Windows only |
-| [`x11rb`](https://crates.io/crates/x11rb) | Linux only |
 
 ---
 
@@ -132,3 +130,5 @@ window.warp_mouse(x, y);            // move cursor to window-local coordinates
 
 MIT — see [LICENSE](LICENSE) for details.  
 Copyright © 2025 Patrick Reese (Retroboi64)
+
+Made with 🖤 by Retroboi64
