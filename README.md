@@ -116,11 +116,6 @@ window.warp_mouse(x, y);            // move cursor to window-local coordinates
 
 `Window` implements [`HasWindowHandle`](https://docs.rs/raw-window-handle/latest/raw_window_handle/trait.HasWindowHandle.html) and [`HasDisplayHandle`](https://docs.rs/raw-window-handle/latest/raw_window_handle/trait.HasDisplayHandle.html) from the [`raw-window-handle`](https://crates.io/crates/raw-window-handle) crate, so you can pass it directly to `wgpu`, `softbuffer`, `ash`, or any other renderer that accepts those traits.
 
-```rust
-// Example: create a wgpu surface
-let surface = instance.create_surface(&window)?;
-```
-
 ---
 
 ## Dependencies
