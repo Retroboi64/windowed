@@ -1,6 +1,6 @@
 # windowed
 
-A minimal, dependency-light cross-platform windowing library for **Windows** (Win32) and **Linux** (X11).
+A minimal, zero-dependency cross-platform windowing library for **Windows** (Win32) and **Linux** (X11).
 
 No GPU context, no retained scene graph — just a window, an event loop, and raw window handles you can hand off to a renderer like `wgpu`, `ash`, or `softbuffer`.
 

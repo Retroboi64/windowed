@@ -6,6 +6,7 @@
 //!   cargo run --example gl_window
 
 use gl::{FRAGMENT_SHADER, VERTEX_SHADER};
+use windowed::rwd::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
 use windowed::{ControlFlow, Event, Key, Window, WindowConfig};
 
 const VERTEX_SHADER_SOURCE: &[u8] = b"#version 330 core
@@ -129,9 +130,6 @@ fn main() -> windowed::Result<()> {
     // ── Grab display/window handles once for swap ──────────────────────
     #[cfg(target_os = "linux")]
     let (x_display, x_window) = {
-        use raw_window_handle::{
-            HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
-        };
         #[link(name = "X11")]
         unsafe extern "C" {
             fn XOpenDisplay(name: *const i8) -> *mut std::ffi::c_void;
@@ -152,7 +150,6 @@ fn main() -> windowed::Result<()> {
 
     #[cfg(target_os = "windows")]
     let hdc = {
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         let hwnd = match window.window_handle().unwrap().as_raw() {
             RawWindowHandle::Win32(h) => h.hwnd.get() as *mut std::ffi::c_void,
             _ => panic!("expected Win32 window"),

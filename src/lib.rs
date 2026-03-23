@@ -3,6 +3,7 @@ mod platform;
 pub mod config;
 pub mod error;
 pub mod event;
+pub mod rwd;
 pub mod window;
 
 pub use config::WindowConfig;

@@ -4,7 +4,7 @@ use crate::event::{ControlFlow, Event};
 use crate::platform::PlatformWindow;
 
 #[allow(unused_imports)]
-use raw_window_handle::{
+use crate::rwd::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle,
 };

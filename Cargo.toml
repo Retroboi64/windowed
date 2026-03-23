@@ -1,16 +1,15 @@
 [package]
 name = "windowed"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
-description = "A minimal cross-platform windowing library for Windows and Linux (X11)"
+description = "A minimal, zero-dependency and cross-platform windowing library for Windows and Linux (X11)"
 license = "MIT"
 authors = ["Patrick Reese (Retroboi64) <https://github.com/Retroboi64>"]
 copyright = "Copyright (c) 2025 Patrick Reese (Retroboi64)"
-keywords = ["window", "windowing", "x11", "win32", "cross-platform"]
+keywords = ["window", "windowing", "x11", "win32", "cross-platform", "zero-dependency"]
 repository = "https://github.com/Retroboi64/windowed"
 
 [dependencies]
-raw-window-handle = "0.6"
 gl = { version = "0.14.0", optional = true }
 
 [features]

@@ -8,7 +8,7 @@
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
 
-use raw_window_handle::{
+use crate::rwd::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, Win32WindowHandle, WindowHandle, WindowsDisplayHandle,
 };

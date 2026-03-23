@@ -8,7 +8,7 @@
 use std::ffi::{CString, c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use std::ptr::NonNull;
 
-use raw_window_handle::{
+use crate::rwd::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle, XlibDisplayHandle, XlibWindowHandle,
 };
