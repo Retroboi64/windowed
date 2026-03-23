@@ -1,195 +1,529 @@
-use x11rb::COPY_DEPTH_FROM_PARENT;
-use x11rb::connection::Connection;
-use x11rb::protocol::Event as XEvent;
-use x11rb::protocol::xproto::*;
-use x11rb::rust_connection::RustConnection;
-use x11rb::wrapper::ConnectionExt as _;
+#![allow(
+    non_camel_case_types,
+    non_snake_case,
+    dead_code,
+    clippy::upper_case_acronyms
+)]
+
+use std::ffi::{CString, c_char, c_int, c_long, c_uint, c_ulong, c_void};
+use std::ptr::NonNull;
 
 use raw_window_handle::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle, XlibDisplayHandle, XlibWindowHandle,
 };
 
-use std::ffi::c_void;
-use std::ptr::NonNull;
-
 use crate::config::WindowConfig;
 use crate::error::{Error, Result};
 use crate::event::{ControlFlow, Event, Key, MouseButton};
 
-// We need a real Xlib Display* for GLX.  x11rb never creates one, so we open
-// our own connection via XOpenDisplay and keep it alive for the window's lifetime.
+type XDisplay = c_void;
+type XWindow = c_ulong;
+type Atom = c_ulong;
+type Bool = c_int;
+type Pixmap = c_ulong;
+type Cursor = c_ulong;
+type GC = *mut c_void;
+
+const KEY_PRESS: c_int = 2;
+const KEY_RELEASE: c_int = 3;
+const BUTTON_PRESS: c_int = 4;
+const BUTTON_RELEASE: c_int = 5;
+const MOTION_NOTIFY: c_int = 6;
+const FOCUS_IN: c_int = 9;
+const FOCUS_OUT: c_int = 10;
+const CONFIGURE_NOTIFY: c_int = 22;
+const CLIENT_MESSAGE: c_int = 33;
+
+const KEY_PRESS_MASK: c_long = 1 << 0;
+const KEY_RELEASE_MASK: c_long = 1 << 1;
+const BUTTON_PRESS_MASK: c_long = 1 << 2;
+const BUTTON_RELEASE_MASK: c_long = 1 << 3;
+const POINTER_MOTION_MASK: c_long = 1 << 6;
+const STRUCTURE_NOTIFY_MASK: c_long = 1 << 17;
+const FOCUS_CHANGE_MASK: c_long = 1 << 21;
+
+const CW_BACK_PIXEL: c_ulong = 1 << 1;
+const CW_EVENT_MASK: c_ulong = 1 << 11;
+const CW_CURSOR: c_ulong = 1 << 14;
+
+const INPUT_OUTPUT: c_uint = 1;
+const COPY_FROM_PARENT: c_long = 0;
+const PROP_MODE_REPLACE: c_int = 0;
+const GC_FOREGROUND: c_ulong = 1 << 2;
+const P_MIN_SIZE: c_long = 1 << 4;
+const P_MAX_SIZE: c_long = 1 << 5;
+
+// ── XEvent sub-structs (64-bit Linux ABI) ──────────────────────────────────
+//
+// All event structs share this header layout (offsets on LP64):
+//   int  type          @  0  (4 B) + 4 B padding
+//   ulong serial       @  8  (8 B)
+//   int  send_event    @ 16  (4 B) + 4 B padding
+//   ptr  display       @ 24  (8 B)
+//   ulong window       @ 32  (8 B)
+// followed by event-specific fields.
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct XKeyEvent {
+    type_: c_int,
+    _p0: c_int,
+    serial: c_ulong,
+    send_event: Bool,
+    _p1: c_int,
+    display: *mut XDisplay,
+    window: XWindow,
+    root: XWindow,
+    subwindow: XWindow,
+    time: c_ulong,
+    x: c_int,
+    y: c_int,
+    x_root: c_int,
+    y_root: c_int,
+    state: c_uint,
+    keycode: c_uint,
+    same_screen: Bool,
+    _p2: c_int,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct XButtonEvent {
+    type_: c_int,
+    _p0: c_int,
+    serial: c_ulong,
+    send_event: Bool,
+    _p1: c_int,
+    display: *mut XDisplay,
+    window: XWindow,
+    root: XWindow,
+    subwindow: XWindow,
+    time: c_ulong,
+    x: c_int,
+    y: c_int,
+    x_root: c_int,
+    y_root: c_int,
+    state: c_uint,
+    button: c_uint,
+    same_screen: Bool,
+    _p2: c_int,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct XMotionEvent {
+    type_: c_int,
+    _p0: c_int,
+    serial: c_ulong,
+    send_event: Bool,
+    _p1: c_int,
+    display: *mut XDisplay,
+    window: XWindow,
+    root: XWindow,
+    subwindow: XWindow,
+    time: c_ulong,
+    x: c_int,
+    y: c_int,
+    x_root: c_int,
+    y_root: c_int,
+    state: c_uint,
+    is_hint: c_char,
+    _p2: [u8; 3],
+    same_screen: Bool,
+    _p3: c_int,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct XConfigureEvent {
+    type_: c_int,
+    _p0: c_int,
+    serial: c_ulong,
+    send_event: Bool,
+    _p1: c_int,
+    display: *mut XDisplay,
+    event: XWindow,
+    window: XWindow,
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+    border_width: c_int,
+    _p2: c_int,
+    above: XWindow,
+    override_redirect: Bool,
+    _p3: c_int,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct XClientMessageEvent {
+    type_: c_int,
+    _p0: c_int,
+    serial: c_ulong,
+    send_event: Bool,
+    _p1: c_int,
+    display: *mut XDisplay,
+    window: XWindow,
+    message_type: Atom,
+    format: c_int,
+    _p2: c_int,
+    data: [c_long; 5],
+}
+
+#[repr(C)]
+union XEvent {
+    type_: c_int,
+    key: XKeyEvent,
+    button: XButtonEvent,
+    motion: XMotionEvent,
+    configure: XConfigureEvent,
+    client_message: XClientMessageEvent,
+    _pad: [c_long; 24],
+}
+
+#[repr(C)]
+struct XSetWindowAttributes {
+    background_pixmap: Pixmap,
+    background_pixel: c_ulong,
+    border_pixmap: Pixmap,
+    border_pixel: c_ulong,
+    bit_gravity: c_int,
+    win_gravity: c_int,
+    backing_store: c_int,
+    _p0: c_int,
+    backing_planes: c_ulong,
+    backing_pixel: c_ulong,
+    save_under: Bool,
+    _p1: c_int,
+    event_mask: c_long,
+    do_not_propagate_mask: c_long,
+    override_redirect: Bool,
+    _p2: c_int,
+    colormap: c_ulong,
+    cursor: Cursor,
+}
+
+#[repr(C)]
+struct XSizeHints {
+    flags: c_long,
+    x: c_int,
+    y: c_int,
+    width: c_int,
+    height: c_int,
+    min_width: c_int,
+    min_height: c_int,
+    max_width: c_int,
+    max_height: c_int,
+    width_inc: c_int,
+    height_inc: c_int,
+    min_aspect_x: c_int,
+    min_aspect_y: c_int,
+    max_aspect_x: c_int,
+    max_aspect_y: c_int,
+    base_width: c_int,
+    base_height: c_int,
+    win_gravity: c_int,
+    _pad: c_int,
+}
+
+// ── XColor ────────────────────────────────────────────────────────────────
+#[repr(C)]
+struct XColor {
+    pixel: c_ulong,
+    red: u16,
+    green: u16,
+    blue: u16,
+    flags: c_char,
+    pad: c_char,
+}
+
+#[repr(C)]
+struct XGCValues {
+    function: c_int,
+    _p0: c_int,
+    plane_mask: c_ulong,
+    foreground: c_ulong,
+    background: c_ulong,
+    line_width: c_int,
+    line_style: c_int,
+    cap_style: c_int,
+    join_style: c_int,
+    fill_style: c_int,
+    fill_rule: c_int,
+    arc_mode: c_int,
+    _p1: c_int,
+    tile: c_ulong,
+    stipple: c_ulong,
+    ts_x_origin: c_int,
+    ts_y_origin: c_int,
+    font: c_ulong,
+    subwindow_mode: c_int,
+    graphics_exposures: c_int,
+    clip_x_origin: c_int,
+    clip_y_origin: c_int,
+    clip_mask: c_ulong,
+    dash_offset: c_int,
+    dashes: c_char,
+    _p2: [u8; 3],
+}
+
 #[link(name = "X11")]
 unsafe extern "C" {
-    fn XOpenDisplay(name: *const i8) -> *mut c_void;
-    fn XCloseDisplay(display: *mut c_void);
+    fn XOpenDisplay(name: *const c_char) -> *mut XDisplay;
+    fn XCloseDisplay(display: *mut XDisplay);
+    fn XDefaultScreen(display: *mut XDisplay) -> c_int;
+    fn XRootWindow(display: *mut XDisplay, screen: c_int) -> XWindow;
+    fn XWhitePixel(display: *mut XDisplay, screen: c_int) -> c_ulong;
+    fn XCreateWindow(
+        display: *mut XDisplay,
+        parent: XWindow,
+        x: c_int,
+        y: c_int,
+        width: c_uint,
+        height: c_uint,
+        border_width: c_uint,
+        depth: c_int,
+        class: c_uint,
+        visual: *mut c_void,
+        valuemask: c_ulong,
+        attributes: *mut XSetWindowAttributes,
+    ) -> XWindow;
+    fn XMapWindow(display: *mut XDisplay, w: XWindow) -> c_int;
+    fn XFlush(display: *mut XDisplay) -> c_int;
+    fn XStoreName(display: *mut XDisplay, w: XWindow, name: *const c_char) -> c_int;
+    fn XInternAtom(display: *mut XDisplay, name: *const c_char, only_if_exists: Bool) -> Atom;
+    fn XSetWMProtocols(
+        display: *mut XDisplay,
+        w: XWindow,
+        protocols: *mut Atom,
+        count: c_int,
+    ) -> c_int;
+    fn XSetWMNormalHints(display: *mut XDisplay, w: XWindow, hints: *mut XSizeHints);
+    fn XPending(display: *mut XDisplay) -> c_int;
+    fn XNextEvent(display: *mut XDisplay, event_return: *mut XEvent) -> c_int;
+    fn XWarpPointer(
+        display: *mut XDisplay,
+        src_w: XWindow,
+        dest_w: XWindow,
+        src_x: c_int,
+        src_y: c_int,
+        src_width: c_uint,
+        src_height: c_uint,
+        dest_x: c_int,
+        dest_y: c_int,
+    ) -> c_int;
+    fn XChangeWindowAttributes(
+        display: *mut XDisplay,
+        w: XWindow,
+        valuemask: c_ulong,
+        attributes: *mut XSetWindowAttributes,
+    ) -> c_int;
+    fn XDestroyWindow(display: *mut XDisplay, w: XWindow) -> c_int;
+    fn XCreatePixmap(
+        display: *mut XDisplay,
+        d: XWindow,
+        width: c_uint,
+        height: c_uint,
+        depth: c_uint,
+    ) -> Pixmap;
+    fn XCreateGC(
+        display: *mut XDisplay,
+        d: XWindow,
+        valuemask: c_ulong,
+        values: *mut XGCValues,
+    ) -> GC;
+    fn XFillRectangle(
+        display: *mut XDisplay,
+        d: XWindow,
+        gc: GC,
+        x: c_int,
+        y: c_int,
+        width: c_uint,
+        height: c_uint,
+    ) -> c_int;
+    fn XFreeGC(display: *mut XDisplay, gc: GC) -> c_int;
+    fn XCreatePixmapCursor(
+        display: *mut XDisplay,
+        source: Pixmap,
+        mask: Pixmap,
+        fg: *mut XColor,
+        bg: *mut XColor,
+        x: c_uint,
+        y: c_uint,
+    ) -> Cursor;
+    fn XFreePixmap(display: *mut XDisplay, pixmap: Pixmap) -> c_int;
+    fn XFreeCursor(display: *mut XDisplay, cursor: Cursor) -> c_int;
+    fn XChangeProperty(
+        display: *mut XDisplay,
+        w: XWindow,
+        property: Atom,
+        type_: Atom,
+        format: c_int,
+        mode: c_int,
+        data: *const c_void,
+        nelements: c_int,
+    ) -> c_int;
 }
 
 pub struct PlatformWindow {
-    conn: RustConnection,
-    window: u32,
-    screen_num: usize,
-    wm_delete_window: u32,
-    blank_cursor: u32,
+    display: *mut XDisplay,
+    window: XWindow,
+    screen: c_int,
+    wm_delete_window: Atom,
+    blank_cursor: Cursor,
     width: u32,
     height: u32,
-    /// Real Xlib Display* — kept alive so GLX can use it.
-    xlib_display: *mut c_void,
 }
 
-// SAFETY: we never share the display pointer across threads.
 unsafe impl Send for PlatformWindow {}
 
 impl PlatformWindow {
     pub fn new(config: &WindowConfig) -> Result<Self> {
-        // Open a real Xlib connection so GLX has a Display* to work with.
-        let xlib_display = unsafe { XOpenDisplay(std::ptr::null()) };
-        if xlib_display.is_null() {
+        let display = unsafe { XOpenDisplay(std::ptr::null()) };
+        if display.is_null() {
             return Err(Error::Platform(
                 "XOpenDisplay failed — is $DISPLAY set?".into(),
             ));
         }
 
-        let (conn, screen_num) =
-            RustConnection::connect(None).map_err(|e| Error::Platform(e.to_string()))?;
+        let screen = unsafe { XDefaultScreen(display) };
+        let root = unsafe { XRootWindow(display, screen) };
+        let white = unsafe { XWhitePixel(display, screen) };
 
-        let screen = &conn.setup().roots[screen_num].clone();
-
-        let window = conn
-            .generate_id()
-            .map_err(|e| Error::Platform(e.to_string()))?;
-
-        let event_mask = EventMask::EXPOSURE
-            | EventMask::KEY_PRESS
-            | EventMask::KEY_RELEASE
-            | EventMask::BUTTON_PRESS
-            | EventMask::BUTTON_RELEASE
-            | EventMask::POINTER_MOTION
-            | EventMask::STRUCTURE_NOTIFY
-            | EventMask::FOCUS_CHANGE;
+        let event_mask = KEY_PRESS_MASK
+            | KEY_RELEASE_MASK
+            | BUTTON_PRESS_MASK
+            | BUTTON_RELEASE_MASK
+            | POINTER_MOTION_MASK
+            | STRUCTURE_NOTIFY_MASK
+            | FOCUS_CHANGE_MASK;
 
         let (x, y) = config.position.unwrap_or((0, 0));
+        let mut attrs: XSetWindowAttributes = unsafe { std::mem::zeroed() };
+        attrs.background_pixel = white;
+        attrs.event_mask = event_mask;
 
-        conn.create_window(
-            COPY_DEPTH_FROM_PARENT,
-            window,
-            screen.root,
-            x as i16,
-            y as i16,
-            config.width as u16,
-            config.height as u16,
-            0,
-            WindowClass::INPUT_OUTPUT,
-            screen.root_visual,
-            &CreateWindowAux::new()
-                .background_pixel(screen.white_pixel)
-                .event_mask(event_mask),
-        )
-        .map_err(|e| Error::Platform(e.to_string()))?;
-
-        conn.change_property8(
-            PropMode::REPLACE,
-            window,
-            AtomEnum::WM_NAME,
-            AtomEnum::STRING,
-            config.title.as_bytes(),
-        )
-        .map_err(|e| Error::Platform(e.to_string()))?;
-
-        let utf8_string = intern_atom(&conn, b"UTF8_STRING")?;
-        let net_wm_name = intern_atom(&conn, b"_NET_WM_NAME")?;
-        conn.change_property8(
-            PropMode::REPLACE,
-            window,
-            net_wm_name,
-            utf8_string,
-            config.title.as_bytes(),
-        )
-        .map_err(|e| Error::Platform(e.to_string()))?;
-
-        let wm_protocols = intern_atom(&conn, b"WM_PROTOCOLS")?;
-        let wm_delete_window = intern_atom(&conn, b"WM_DELETE_WINDOW")?;
-        conn.change_property32(
-            PropMode::REPLACE,
-            window,
-            wm_protocols,
-            AtomEnum::ATOM,
-            &[wm_delete_window],
-        )
-        .map_err(|e| Error::Platform(e.to_string()))?;
-
-        if !config.resizable {
-            set_fixed_size(&conn, window, config.width, config.height)?;
+        let window = unsafe {
+            XCreateWindow(
+                display,
+                root,
+                x,
+                y,
+                config.width,
+                config.height,
+                0,
+                COPY_FROM_PARENT as c_int,
+                INPUT_OUTPUT,
+                std::ptr::null_mut(),
+                CW_BACK_PIXEL | CW_EVENT_MASK,
+                &mut attrs,
+            )
+        };
+        if window == 0 {
+            return Err(Error::Platform("XCreateWindow failed".into()));
         }
 
-        let blank_cursor = create_blank_cursor(&conn, screen)?;
+        let title_c = CString::new(config.title.as_str())
+            .unwrap_or_else(|_| CString::new("windowed").unwrap());
+        unsafe { XStoreName(display, window, title_c.as_ptr()) };
 
-        conn.map_window(window)
-            .map_err(|e| Error::Platform(e.to_string()))?;
-        conn.flush().map_err(|e| Error::Platform(e.to_string()))?;
+        let utf8_atom = intern_atom(display, b"UTF8_STRING\0");
+        let net_wm_name = intern_atom(display, b"_NET_WM_NAME\0");
+        let tb = config.title.as_bytes();
+        unsafe {
+            XChangeProperty(
+                display,
+                window,
+                net_wm_name,
+                utf8_atom,
+                8,
+                PROP_MODE_REPLACE,
+                tb.as_ptr() as *const c_void,
+                tb.len() as c_int,
+            );
+        }
+
+        let mut wm_delete_window = intern_atom(display, b"WM_DELETE_WINDOW\0");
+        unsafe { XSetWMProtocols(display, window, &mut wm_delete_window, 1) };
+
+        if !config.resizable {
+            let mut hints: XSizeHints = unsafe { std::mem::zeroed() };
+            hints.flags = P_MIN_SIZE | P_MAX_SIZE;
+            hints.min_width = config.width as c_int;
+            hints.min_height = config.height as c_int;
+            hints.max_width = config.width as c_int;
+            hints.max_height = config.height as c_int;
+            unsafe { XSetWMNormalHints(display, window, &mut hints) };
+        }
+
+        let blank_cursor = create_blank_cursor(display, root)?;
+
+        unsafe {
+            XMapWindow(display, window);
+            XFlush(display);
+        }
 
         Ok(Self {
-            conn,
+            display,
             window,
-            screen_num,
+            screen,
             wm_delete_window,
             blank_cursor,
             width: config.width,
             height: config.height,
-            xlib_display,
         })
     }
 
     pub fn run<F: FnMut(Event) -> ControlFlow>(&mut self, mut callback: F) -> Result<()> {
+        let mut polling = false;
+
         loop {
-            // Drain every pending X event without blocking.
-            loop {
-                let ev = self
-                    .conn
-                    .poll_for_event()
-                    .map_err(|e| Error::Platform(e.to_string()))?;
-
-                let Some(x_event) = ev else { break };
-
-                if let Some(event) = self.translate_event(x_event) {
-                    if matches!(callback(event), ControlFlow::Exit) {
-                        return Ok(());
+            while unsafe { XPending(self.display) } > 0 {
+                let mut ev: XEvent = unsafe { std::mem::zeroed() };
+                unsafe { XNextEvent(self.display, &mut ev) };
+                if let Some(event) = self.translate_event(&ev) {
+                    match callback(event) {
+                        ControlFlow::Exit => return Ok(()),
+                        ControlFlow::Poll => polling = true,
+                        ControlFlow::WarpAndPoll(x, y) => {
+                            polling = true;
+                            self.warp_mouse(x, y);
+                        }
+                        ControlFlow::Continue => {}
                     }
                 }
             }
 
-            // After draining events, always request a redraw.
-            // This gives the app a chance to render every iteration regardless
-            // of whether any X events arrived — required for a GL render loop.
-            if matches!(callback(Event::RedrawRequested), ControlFlow::Exit) {
-                return Ok(());
+            match callback(Event::RedrawRequested) {
+                ControlFlow::Exit => return Ok(()),
+                ControlFlow::Poll => polling = true,
+                ControlFlow::WarpAndPoll(x, y) => {
+                    polling = true;
+                    self.warp_mouse(x, y);
+                }
+                ControlFlow::Continue => if !polling {},
             }
 
-            self.conn
-                .flush()
-                .map_err(|e| Error::Platform(e.to_string()))?;
-
-            // Yield briefly so we don't burn 100% CPU when idle.
+            unsafe { XFlush(self.display) };
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
 
-    fn translate_event(&mut self, x_event: XEvent) -> Option<Event> {
-        match x_event {
-            XEvent::ClientMessage(e) => {
-                if e.data.as_data32()[0] == self.wm_delete_window {
+    fn translate_event(&mut self, ev: &XEvent) -> Option<Event> {
+        match unsafe { ev.type_ } {
+            CLIENT_MESSAGE => {
+                let atom = unsafe { ev.client_message.data[0] as Atom };
+                if atom == self.wm_delete_window {
                     Some(Event::CloseRequested)
                 } else {
                     None
                 }
             }
-
-            // Expose is now ignored — the run loop drives redraws directly.
-            XEvent::Expose(_) => None,
-
-            XEvent::ConfigureNotify(e) => {
-                let w = e.width as u32;
-                let h = e.height as u32;
+            CONFIGURE_NOTIFY => {
+                let w = unsafe { ev.configure.width as u32 };
+                let h = unsafe { ev.configure.height as u32 };
                 if w != self.width || h != self.height {
                     self.width = w;
                     self.height = h;
@@ -201,80 +535,75 @@ impl PlatformWindow {
                     None
                 }
             }
-
-            XEvent::KeyPress(e) => Some(Event::KeyDown(x11_keycode_to_key(e.detail))),
-            XEvent::KeyRelease(e) => Some(Event::KeyUp(x11_keycode_to_key(e.detail))),
-
-            XEvent::ButtonPress(e) => match e.detail {
-                4 => Some(Event::MouseWheel { delta: 1.0 }),
-                5 => Some(Event::MouseWheel { delta: -1.0 }),
-                btn => x11_button(btn).map(|button| Event::MouseDown {
-                    button,
-                    x: e.event_x as i32,
-                    y: e.event_y as i32,
-                }),
-            },
-
-            XEvent::ButtonRelease(e) => x11_button(e.detail).map(|button| Event::MouseUp {
-                button,
-                x: e.event_x as i32,
-                y: e.event_y as i32,
+            KEY_PRESS => Some(Event::KeyDown(x11_keycode_to_key(
+                unsafe { ev.key.keycode } as u8,
+            ))),
+            KEY_RELEASE => Some(Event::KeyUp(x11_keycode_to_key(
+                unsafe { ev.key.keycode } as u8
+            ))),
+            BUTTON_PRESS => {
+                let (btn, x, y) = unsafe { (ev.button.button, ev.button.x, ev.button.y) };
+                match btn {
+                    4 => Some(Event::MouseWheel { delta: 1.0 }),
+                    5 => Some(Event::MouseWheel { delta: -1.0 }),
+                    b => x11_button(b).map(|button| Event::MouseDown { button, x, y }),
+                }
+            }
+            BUTTON_RELEASE => {
+                let (btn, x, y) = unsafe { (ev.button.button, ev.button.x, ev.button.y) };
+                x11_button(btn).map(|button| Event::MouseUp { button, x, y })
+            }
+            MOTION_NOTIFY => Some(Event::MouseMove {
+                x: unsafe { ev.motion.x },
+                y: unsafe { ev.motion.y },
             }),
-
-            XEvent::MotionNotify(e) => Some(Event::MouseMove {
-                x: e.event_x as i32,
-                y: e.event_y as i32,
-            }),
-
-            XEvent::FocusIn(_) => Some(Event::FocusGained),
-            XEvent::FocusOut(_) => Some(Event::FocusLost),
-
+            FOCUS_IN => Some(Event::FocusGained),
+            FOCUS_OUT => Some(Event::FocusLost),
             _ => None,
         }
     }
 
-    pub fn request_redraw(&self) {
-        let event = ExposeEvent {
-            response_type: EXPOSE_EVENT,
-            window: self.window,
-            x: 0,
-            y: 0,
-            width: self.width as u16,
-            height: self.height as u16,
-            count: 0,
-            sequence: 0,
-        };
-        let _ = self
-            .conn
-            .send_event(false, self.window, EventMask::EXPOSURE, event);
-        let _ = self.conn.flush();
-    }
+    pub fn request_redraw(&self) {}
 
-    #[allow(unused_imports)]
     pub fn set_cursor_visible(&self, visible: bool) {
-        let cursor = if visible { 0u32 } else { self.blank_cursor };
-        let aux = ChangeWindowAttributesAux::new().cursor(cursor);
-        let _ = self.conn.change_window_attributes(self.window, &aux);
-        let _ = self.conn.flush();
+        let cursor = if visible { 0u64 } else { self.blank_cursor };
+        let mut attrs: XSetWindowAttributes = unsafe { std::mem::zeroed() };
+        attrs.cursor = cursor;
+        unsafe {
+            XChangeWindowAttributes(self.display, self.window, CW_CURSOR, &mut attrs);
+            XFlush(self.display);
+        }
     }
 
     pub fn warp_mouse(&self, x: i32, y: i32) {
-        use x11rb::protocol::xproto::ConnectionExt as _;
-        let _ = self
-            .conn
-            .warp_pointer(x11rb::NONE, self.window, 0, 0, 0, 0, x as i16, y as i16);
-        let _ = self.conn.flush();
+        unsafe {
+            XWarpPointer(self.display, 0, self.window, 0, 0, 0, 0, x, y);
+            XFlush(self.display);
+        }
     }
 
     pub fn set_title(&self, title: &str) {
-        let _ = self.conn.change_property8(
-            PropMode::REPLACE,
-            self.window,
-            AtomEnum::WM_NAME,
-            AtomEnum::STRING,
-            title.as_bytes(),
-        );
-        let _ = self.conn.flush();
+        if let Ok(c) = CString::new(title) {
+            unsafe {
+                XStoreName(self.display, self.window, c.as_ptr());
+            }
+        }
+        let utf8_atom = intern_atom(self.display, b"UTF8_STRING\0");
+        let net_wm_name = intern_atom(self.display, b"_NET_WM_NAME\0");
+        let bytes = title.as_bytes();
+        unsafe {
+            XChangeProperty(
+                self.display,
+                self.window,
+                net_wm_name,
+                utf8_atom,
+                8,
+                PROP_MODE_REPLACE,
+                bytes.as_ptr() as *const c_void,
+                bytes.len() as c_int,
+            );
+            XFlush(self.display);
+        }
     }
 
     pub fn inner_size(&self) -> (u32, u32) {
@@ -284,98 +613,53 @@ impl PlatformWindow {
 
 impl Drop for PlatformWindow {
     fn drop(&mut self) {
-        let _ = self.conn.free_cursor(self.blank_cursor);
-        let _ = self.conn.destroy_window(self.window);
-        let _ = self.conn.flush();
-        if !self.xlib_display.is_null() {
-            unsafe { XCloseDisplay(self.xlib_display) };
+        unsafe {
+            XFreeCursor(self.display, self.blank_cursor);
+            XDestroyWindow(self.display, self.window);
+            XFlush(self.display);
+            XCloseDisplay(self.display);
         }
     }
 }
 
 impl HasWindowHandle for PlatformWindow {
     fn window_handle(&self) -> std::result::Result<WindowHandle<'_>, HandleError> {
-        let mut handle = XlibWindowHandle::new(self.window as u64);
-        handle.visual_id = 0;
-        Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Xlib(handle)) })
+        let mut h = XlibWindowHandle::new(self.window);
+        h.visual_id = 0;
+        Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Xlib(h)) })
     }
 }
 
 impl HasDisplayHandle for PlatformWindow {
     fn display_handle(&self) -> std::result::Result<DisplayHandle<'_>, HandleError> {
-        // Provide the real Xlib Display* so GLX (and anything else that needs
-        // it) can use it without falling back to XOpenDisplay.
-        let ptr = NonNull::new(self.xlib_display)
-            .expect("xlib_display is null — XOpenDisplay must have failed");
-        let handle = XlibDisplayHandle::new(Some(ptr), self.screen_num as i32);
-        Ok(unsafe { DisplayHandle::borrow_raw(RawDisplayHandle::Xlib(handle)) })
+        let ptr = NonNull::new(self.display).expect("display is null");
+        let h = XlibDisplayHandle::new(Some(ptr), self.screen);
+        Ok(unsafe { DisplayHandle::borrow_raw(RawDisplayHandle::Xlib(h)) })
     }
 }
 
-// ── helpers ────────────────────────────────────────────────────────────────
-
-fn intern_atom(conn: &RustConnection, name: &[u8]) -> Result<u32> {
-    conn.intern_atom(false, name)
-        .map_err(|e| Error::Platform(e.to_string()))?
-        .reply()
-        .map(|r| r.atom)
-        .map_err(|e| Error::Platform(e.to_string()))
+fn intern_atom(display: *mut XDisplay, name: &[u8]) -> Atom {
+    unsafe { XInternAtom(display, name.as_ptr() as *const c_char, 0) }
 }
 
-fn create_blank_cursor(conn: &RustConnection, screen: &Screen) -> Result<u32> {
-    let pixmap = conn
-        .generate_id()
-        .map_err(|e| Error::Platform(e.to_string()))?;
-    conn.create_pixmap(1, pixmap, screen.root, 1, 1)
-        .map_err(|e| Error::Platform(e.to_string()))?;
-
-    let gc = conn
-        .generate_id()
-        .map_err(|e| Error::Platform(e.to_string()))?;
-    conn.create_gc(gc, pixmap, &CreateGCAux::new().foreground(0))
-        .map_err(|e| Error::Platform(e.to_string()))?;
-    conn.poly_fill_rectangle(
-        pixmap,
-        gc,
-        &[Rectangle {
-            x: 0,
-            y: 0,
-            width: 1,
-            height: 1,
-        }],
-    )
-    .map_err(|e| Error::Platform(e.to_string()))?;
-    conn.free_gc(gc)
-        .map_err(|e| Error::Platform(e.to_string()))?;
-
-    let cursor = conn
-        .generate_id()
-        .map_err(|e| Error::Platform(e.to_string()))?;
-    conn.create_cursor(cursor, pixmap, pixmap, 0, 0, 0, 0, 0, 0, 0, 0)
-        .map_err(|e| Error::Platform(e.to_string()))?;
-    conn.free_pixmap(pixmap)
-        .map_err(|e| Error::Platform(e.to_string()))?;
-
+fn create_blank_cursor(display: *mut XDisplay, root: XWindow) -> Result<Cursor> {
+    let pixmap = unsafe { XCreatePixmap(display, root, 1, 1, 1) };
+    if pixmap == 0 {
+        return Err(Error::Platform("XCreatePixmap failed".into()));
+    }
+    let mut gcv: XGCValues = unsafe { std::mem::zeroed() };
+    gcv.foreground = 0;
+    let gc = unsafe { XCreateGC(display, pixmap, GC_FOREGROUND, &mut gcv) };
+    unsafe { XFillRectangle(display, pixmap, gc, 0, 0, 1, 1) };
+    unsafe { XFreeGC(display, gc) };
+    let mut black: XColor = unsafe { std::mem::zeroed() };
+    let cursor =
+        unsafe { XCreatePixmapCursor(display, pixmap, pixmap, &mut black, &mut black, 0, 0) };
+    unsafe { XFreePixmap(display, pixmap) };
     Ok(cursor)
 }
 
-fn set_fixed_size(conn: &RustConnection, window: u32, width: u32, height: u32) -> Result<()> {
-    let flags: u32 = 0x30;
-    let hints: [u32; 18] = [
-        flags, 0, 0, 0, 0, 0, width, height, width, height, 0, 0, 0, 0, 0, 0, 0, 0,
-    ];
-    conn.change_property32(
-        PropMode::REPLACE,
-        window,
-        AtomEnum::WM_NORMAL_HINTS,
-        AtomEnum::WM_SIZE_HINTS,
-        &hints,
-    )
-    .map_err(|e| Error::Platform(e.to_string()))?;
-    Ok(())
-}
-
-fn x11_button(btn: u8) -> Option<MouseButton> {
+fn x11_button(btn: c_uint) -> Option<MouseButton> {
     match btn {
         1 => Some(MouseButton::Left),
         2 => Some(MouseButton::Middle),
@@ -412,7 +696,6 @@ fn x11_keycode_to_key(code: u8) -> Key {
         56 => Key::B,
         57 => Key::N,
         58 => Key::M,
-
         10 => Key::Num1,
         11 => Key::Num2,
         12 => Key::Num3,
@@ -423,7 +706,6 @@ fn x11_keycode_to_key(code: u8) -> Key {
         17 => Key::Num8,
         18 => Key::Num9,
         19 => Key::Num0,
-
         67 => Key::F1,
         68 => Key::F2,
         69 => Key::F3,
@@ -436,7 +718,6 @@ fn x11_keycode_to_key(code: u8) -> Key {
         76 => Key::F10,
         95 => Key::F11,
         96 => Key::F12,
-
         36 => Key::Enter,
         9 => Key::Escape,
         65 => Key::Space,
@@ -444,24 +725,20 @@ fn x11_keycode_to_key(code: u8) -> Key {
         23 => Key::Tab,
         119 => Key::Delete,
         118 => Key::Insert,
-
         113 => Key::ArrowLeft,
         114 => Key::ArrowRight,
         111 => Key::ArrowUp,
         116 => Key::ArrowDown,
-
         110 => Key::Home,
         115 => Key::End,
         112 => Key::PageUp,
         117 => Key::PageDown,
-
         50 => Key::LeftShift,
         62 => Key::RightShift,
         37 => Key::LeftCtrl,
         105 => Key::RightCtrl,
         64 => Key::LeftAlt,
         108 => Key::RightAlt,
-
         _ => Key::Unknown,
     }
 }

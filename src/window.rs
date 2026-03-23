@@ -22,6 +22,25 @@ mod win_gl {
         pub fn wglMakeCurrent(hdc: *mut c_void, hglrc: *mut c_void) -> i32;
     }
 
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        pub fn GetModuleHandleA(lpModuleName: *const i8) -> *mut c_void;
+        pub fn GetProcAddress(hModule: *mut c_void, lpProcName: *const i8) -> *const c_void;
+    }
+
+    pub unsafe fn get_proc_address_wgl(name: *const i8) -> *const c_void {
+        let p = unsafe { wglGetProcAddress(name) };
+        if !p.is_null() && p as isize != 1 && p as isize != 2 && p as isize != 3 && p as isize != -1
+        {
+            return p;
+        }
+        let module = unsafe { GetModuleHandleA(b"opengl32.dll\0".as_ptr() as *const i8) };
+        if module.is_null() {
+            return std::ptr::null();
+        }
+        unsafe { GetProcAddress(module, name) }
+    }
+
     #[link(name = "gdi32")]
     unsafe extern "system" {
         pub fn GetDC(hwnd: *mut c_void) -> *mut c_void;
@@ -140,9 +159,7 @@ impl Window {
         };
 
         #[cfg(target_os = "windows")]
-        unsafe {
-            self.create_gl_context_windows()
-        };
+        self.create_gl_context_windows();
     }
 
     #[cfg(target_os = "linux")]
@@ -201,7 +218,7 @@ impl Window {
     }
 
     #[cfg(target_os = "windows")]
-    unsafe fn create_gl_context_windows(&self) {
+    fn create_gl_context_windows(&self) {
         use win_gl::*;
 
         let hwnd = match self
@@ -213,7 +230,7 @@ impl Window {
             other => panic!("create_gl_context requires a Win32 window handle, got {other:?}"),
         };
 
-        let hdc = GetDC(hwnd);
+        let hdc = unsafe { GetDC(hwnd) };
         assert!(!hdc.is_null(), "GetDC failed");
 
         let pfd = PIXELFORMATDESCRIPTOR {
@@ -245,25 +262,19 @@ impl Window {
             dw_damage_mask: 0,
         };
 
-        let fmt = ChoosePixelFormat(hdc, &pfd);
+        let fmt = unsafe { ChoosePixelFormat(hdc, &pfd) };
         assert!(fmt != 0, "ChoosePixelFormat failed");
 
-        let ok = SetPixelFormat(hdc, fmt, &pfd);
+        let ok = unsafe { SetPixelFormat(hdc, fmt, &pfd) };
         assert!(ok != 0, "SetPixelFormat failed");
 
-        let hglrc = wglCreateContext(hdc);
+        let hglrc = unsafe { wglCreateContext(hdc) };
         assert!(!hglrc.is_null(), "wglCreateContext failed");
 
-        let ok = wglMakeCurrent(hdc, hglrc);
+        let ok = unsafe { wglMakeCurrent(hdc, hglrc) };
         assert!(ok != 0, "wglMakeCurrent failed");
     }
 
-    /// Resolve an OpenGL function pointer by name.
-    ///
-    /// Pass this directly to any GL loader:
-    /// ```ignore
-    /// gl::load_with(|s| window.get_proc_address(s) as *const _);
-    /// ```
     pub fn get_proc_address(&self, name: &str) -> *const c_void {
         let cname = CString::new(name).expect("GL function name contained a null byte");
 
@@ -274,12 +285,10 @@ impl Window {
 
         #[cfg(target_os = "windows")]
         unsafe {
-            win_gl::wglGetProcAddress(cname.as_ptr())
+            win_gl::get_proc_address_wgl(cname.as_ptr())
         }
     }
 
-    /// Print the active GL context handle and version string — quick smoke-test.
-    /// Does not require the `gl` crate; resolves `glGetString` via `get_proc_address`.
     pub fn test_gl(&self) {
         #[cfg(target_os = "linux")]
         {
