@@ -118,14 +118,6 @@ window.warp_mouse(x, y);            // move cursor to window-local coordinates
 
 ---
 
-## Dependencies
-
-| Crate | Used on |
-|---|---|
-| [`raw-window-handle`](https://crates.io/crates/raw-window-handle) | All platforms |
-
----
-
 ## License
 
 MIT — see [LICENSE](LICENSE) for details.  
