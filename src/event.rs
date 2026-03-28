@@ -4,10 +4,11 @@ pub enum Event {
     Resized { width: u32, height: u32 },
     FocusGained,
     FocusLost,
+    CursorEntered,
+    CursorLeft,
     KeyDown(Key),
     KeyUp(Key),
     CharInput(char),
-
     MouseMove { x: i32, y: i32 },
     MouseDown { button: MouseButton, x: i32, y: i32 },
     MouseUp { button: MouseButton, x: i32, y: i32 },
@@ -90,12 +91,10 @@ pub enum Key {
     Tab,
     Delete,
     Insert,
-
     ArrowLeft,
     ArrowRight,
     ArrowUp,
     ArrowDown,
-
     Home,
     End,
     PageUp,
@@ -107,6 +106,8 @@ pub enum Key {
     RightCtrl,
     LeftAlt,
     RightAlt,
+    LeftSuper,
+    RightSuper,
 
     Unknown,
 }

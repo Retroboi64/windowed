@@ -5,6 +5,9 @@ pub struct WindowConfig {
     pub height: u32,
     pub position: Option<(i32, i32)>,
     pub resizable: bool,
+
+    pub min_size: Option<(u32, u32)>,
+    pub max_size: Option<(u32, u32)>,
 }
 
 impl WindowConfig {
@@ -15,6 +18,8 @@ impl WindowConfig {
             height: 600,
             position: None,
             resizable: true,
+            min_size: None,
+            max_size: None,
         }
     }
 
@@ -36,6 +41,16 @@ impl WindowConfig {
 
     pub fn resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
+        self
+    }
+
+    pub fn min_size(mut self, width: u32, height: u32) -> Self {
+        self.min_size = Some((width, height));
+        self
+    }
+
+    pub fn max_size(mut self, width: u32, height: u32) -> Self {
+        self.max_size = Some((width, height));
         self
     }
 }

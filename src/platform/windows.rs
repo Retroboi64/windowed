@@ -1,3 +1,4 @@
+//! Windows Win32 platform backend.
 #![allow(
     non_camel_case_types,
     non_snake_case,
@@ -8,14 +9,13 @@
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
 
+use crate::config::WindowConfig;
+use crate::error::{Error, Result};
+use crate::event::{ControlFlow, Event, Key, MouseButton};
 use crate::rwd::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, Win32WindowHandle, WindowHandle, WindowsDisplayHandle,
 };
-
-use crate::config::WindowConfig;
-use crate::error::{Error, Result};
-use crate::event::{ControlFlow, Event, Key, MouseButton};
 
 type HANDLE = isize;
 type HWND = isize;
@@ -38,7 +38,6 @@ struct POINT {
     x: LONG,
     y: LONG,
 }
-
 #[repr(C)]
 struct RECT {
     left: LONG,
@@ -103,21 +102,23 @@ const WM_RBUTTONUP: UINT = 0x0205;
 const WM_MBUTTONDOWN: UINT = 0x0207;
 const WM_MBUTTONUP: UINT = 0x0208;
 const WM_MOUSEWHEEL: UINT = 0x020A;
+const WM_MOUSELEAVE: UINT = 0x02A3;
+const WM_MOUSEHOVER: UINT = 0x02A1;
 
 const CS_HREDRAW: UINT = 0x0002;
 const CS_VREDRAW: UINT = 0x0001;
 const CS_OWNDC: UINT = 0x0020;
 
-const WS_OVERLAPPED: DWORD = 0x00000000;
-const WS_CAPTION: DWORD = 0x00C00000;
-const WS_SYSMENU: DWORD = 0x00080000;
-const WS_THICKFRAME: DWORD = 0x00040000;
-const WS_MINIMIZEBOX: DWORD = 0x00020000;
-const WS_MAXIMIZEBOX: DWORD = 0x00010000;
+const WS_OVERLAPPED: DWORD = 0x0000_0000;
+const WS_CAPTION: DWORD = 0x00C0_0000;
+const WS_SYSMENU: DWORD = 0x0008_0000;
+const WS_THICKFRAME: DWORD = 0x0004_0000;
+const WS_MINIMIZEBOX: DWORD = 0x0002_0000;
+const WS_MAXIMIZEBOX: DWORD = 0x0001_0000;
 const WS_OVERLAPPEDWINDOW: DWORD =
     WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
 
-const CW_USEDEFAULT: INT = 0x80000000u32 as INT;
+const CW_USEDEFAULT: INT = 0x8000_0000u32 as INT;
 const SW_SHOW: INT = 5;
 const PM_REMOVE: UINT = 0x0001;
 const GWLP_USERDATA: INT = -21;
@@ -147,6 +148,8 @@ const VK_LCONTROL: u16 = 0xA2;
 const VK_RCONTROL: u16 = 0xA3;
 const VK_LMENU: u16 = 0xA4;
 const VK_RMENU: u16 = 0xA5;
+const VK_LWIN: u16 = 0x5B;
+const VK_RWIN: u16 = 0x5C;
 
 #[link(name = "user32")]
 unsafe extern "system" {
@@ -191,6 +194,7 @@ unsafe extern "system" {
     fn InvalidateRect(hWnd: HWND, lpRect: *const RECT, bErase: BOOL) -> BOOL;
     fn BeginPaint(hWnd: HWND, lpPaint: *mut PAINTSTRUCT) -> HANDLE;
     fn EndPaint(hWnd: HWND, lpPaint: *const PAINTSTRUCT) -> BOOL;
+    fn TrackMouseEvent(lpEventTrack: *mut TRACKMOUSEEVENT) -> BOOL;
 }
 
 #[link(name = "kernel32")]
@@ -203,8 +207,20 @@ unsafe extern "system" {
     fn GetStockObject(fnObject: INT) -> HANDLE;
 }
 
+#[repr(C)]
+struct TRACKMOUSEEVENT {
+    cbSize: DWORD,
+    dwFlags: DWORD,
+    hwndTrack: HWND,
+    dwHoverTime: DWORD,
+}
+
+const TME_LEAVE: DWORD = 0x0000_0002;
+const TME_HOVER: DWORD = 0x0000_0001;
+
 struct WindowState {
     events: Vec<Event>,
+    tracking_mouse: bool,
 }
 
 pub struct PlatformWindow {
@@ -295,10 +311,31 @@ unsafe extern "system" fn wnd_proc(
         }
 
         WM_MOUSEMOVE => {
+            if let Ok(mut s) = state.lock() {
+                if !s.tracking_mouse {
+                    s.tracking_mouse = true;
+                    let mut tme = TRACKMOUSEEVENT {
+                        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as DWORD,
+                        dwFlags: TME_LEAVE | TME_HOVER,
+                        hwndTrack: hwnd,
+                        dwHoverTime: 1,
+                    };
+                    unsafe { TrackMouseEvent(&mut tme) };
+                    s.events.push(Event::CursorEntered);
+                }
+            }
             let (x, y) = mouse_xy!(lparam);
             push!(Event::MouseMove { x, y });
             0
         }
+        WM_MOUSELEAVE => {
+            if let Ok(mut s) = state.lock() {
+                s.tracking_mouse = false;
+                s.events.push(Event::CursorLeft);
+            }
+            0
+        }
+
         WM_LBUTTONDOWN => {
             let (x, y) = mouse_xy!(lparam);
             push!(Event::MouseDown {
@@ -423,7 +460,10 @@ impl PlatformWindow {
                 .unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
 
             let title = to_wide(&format!("{}\0", config.title));
-            let state = Arc::new(Mutex::new(WindowState { events: Vec::new() }));
+            let state = Arc::new(Mutex::new(WindowState {
+                events: Vec::new(),
+                tracking_mouse: false,
+            }));
 
             let hwnd = CreateWindowExW(
                 0,
@@ -444,7 +484,6 @@ impl PlatformWindow {
             }
 
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Arc::as_ptr(&state) as LONG_PTR);
-
             ShowWindow(hwnd, SW_SHOW);
             UpdateWindow(hwnd);
 
@@ -578,7 +617,6 @@ fn to_wide(s: &str) -> Vec<u16> {
 
 fn vk_to_key(vk: u16) -> Key {
     match vk {
-        // Letters
         0x41 => Key::A,
         0x42 => Key::B,
         0x43 => Key::C,
@@ -605,7 +643,7 @@ fn vk_to_key(vk: u16) -> Key {
         0x58 => Key::X,
         0x59 => Key::Y,
         0x5A => Key::Z,
-        // Top-row digits
+
         0x30 => Key::Num0,
         0x31 => Key::Num1,
         0x32 => Key::Num2,
@@ -616,7 +654,6 @@ fn vk_to_key(vk: u16) -> Key {
         0x37 => Key::Num7,
         0x38 => Key::Num8,
         0x39 => Key::Num9,
-        // Numpad digits
         0x60 => Key::Num0,
         0x61 => Key::Num1,
         0x62 => Key::Num2,
@@ -627,7 +664,7 @@ fn vk_to_key(vk: u16) -> Key {
         0x67 => Key::Num7,
         0x68 => Key::Num8,
         0x69 => Key::Num9,
-        // F-keys
+
         0x70 => Key::F1,
         0x71 => Key::F2,
         0x72 => Key::F3,
@@ -640,7 +677,7 @@ fn vk_to_key(vk: u16) -> Key {
         0x79 => Key::F10,
         0x7A => Key::F11,
         0x7B => Key::F12,
-        // Special
+
         VK_RETURN => Key::Enter,
         VK_ESCAPE => Key::Escape,
         VK_SPACE => Key::Space,
@@ -662,6 +699,8 @@ fn vk_to_key(vk: u16) -> Key {
         VK_RCONTROL => Key::RightCtrl,
         VK_LMENU => Key::LeftAlt,
         VK_RMENU => Key::RightAlt,
+        VK_LWIN => Key::LeftSuper,
+        VK_RWIN => Key::RightSuper,
         _ => Key::Unknown,
     }
 }

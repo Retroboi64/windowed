@@ -1,3 +1,4 @@
+//! Linux / X11 platform backend.
 #![allow(
     non_camel_case_types,
     non_snake_case,
@@ -8,15 +9,15 @@
 use std::ffi::{CString, c_char, c_int, c_long, c_uint, c_ulong, c_void};
 use std::ptr::NonNull;
 
+use crate::config::WindowConfig;
+use crate::error::{Error, Result};
+use crate::event::{ControlFlow, Event, Key, MouseButton};
 use crate::rwd::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle, XlibDisplayHandle, XlibWindowHandle,
 };
 
-use crate::config::WindowConfig;
-use crate::error::{Error, Result};
-use crate::event::{ControlFlow, Event, Key, MouseButton};
-
+// ── C type aliases ────────────────────────────────────────────────────────────
 type XDisplay = c_void;
 type XWindow = c_ulong;
 type Atom = c_ulong;
@@ -25,24 +26,31 @@ type Pixmap = c_ulong;
 type Cursor = c_ulong;
 type GC = *mut c_void;
 
+// ── X11 event type constants ──────────────────────────────────────────────────
 const KEY_PRESS: c_int = 2;
 const KEY_RELEASE: c_int = 3;
 const BUTTON_PRESS: c_int = 4;
 const BUTTON_RELEASE: c_int = 5;
 const MOTION_NOTIFY: c_int = 6;
+const ENTER_NOTIFY: c_int = 7;
+const LEAVE_NOTIFY: c_int = 8;
 const FOCUS_IN: c_int = 9;
 const FOCUS_OUT: c_int = 10;
 const CONFIGURE_NOTIFY: c_int = 22;
 const CLIENT_MESSAGE: c_int = 33;
 
+// ── X11 event mask constants ──────────────────────────────────────────────────
 const KEY_PRESS_MASK: c_long = 1 << 0;
 const KEY_RELEASE_MASK: c_long = 1 << 1;
 const BUTTON_PRESS_MASK: c_long = 1 << 2;
 const BUTTON_RELEASE_MASK: c_long = 1 << 3;
 const POINTER_MOTION_MASK: c_long = 1 << 6;
+const ENTER_WINDOW_MASK: c_long = 1 << 4;
+const LEAVE_WINDOW_MASK: c_long = 1 << 5;
 const STRUCTURE_NOTIFY_MASK: c_long = 1 << 17;
 const FOCUS_CHANGE_MASK: c_long = 1 << 21;
 
+// ── XCreateWindow valuemask flags ────────────────────────────────────────────
 const CW_BACK_PIXEL: c_ulong = 1 << 1;
 const CW_EVENT_MASK: c_ulong = 1 << 11;
 const CW_CURSOR: c_ulong = 1 << 14;
@@ -54,16 +62,7 @@ const GC_FOREGROUND: c_ulong = 1 << 2;
 const P_MIN_SIZE: c_long = 1 << 4;
 const P_MAX_SIZE: c_long = 1 << 5;
 
-// ── XEvent sub-structs (64-bit Linux ABI) ──────────────────────────────────
-//
-// All event structs share this header layout (offsets on LP64):
-//   int  type          @  0  (4 B) + 4 B padding
-//   ulong serial       @  8  (8 B)
-//   int  send_event    @ 16  (4 B) + 4 B padding
-//   ptr  display       @ 24  (8 B)
-//   ulong window       @ 32  (8 B)
-// followed by event-specific fields.
-
+// ── XEvent sub-structs (64-bit Linux LP64 ABI) ────────────────────────────────
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct XKeyEvent {
@@ -128,10 +127,35 @@ struct XMotionEvent {
     x_root: c_int,
     y_root: c_int,
     state: c_uint,
-    is_hint: c_char,
+    is_hint: std::ffi::c_char,
     _p2: [u8; 3],
     same_screen: Bool,
     _p3: c_int,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct XCrossingEvent {
+    type_: c_int,
+    _p0: c_int,
+    serial: c_ulong,
+    send_event: Bool,
+    _p1: c_int,
+    display: *mut XDisplay,
+    window: XWindow,
+    root: XWindow,
+    subwindow: XWindow,
+    time: c_ulong,
+    x: c_int,
+    y: c_int,
+    x_root: c_int,
+    y_root: c_int,
+    mode: c_int,
+    detail: c_int,
+    same_screen: Bool,
+    focus: Bool,
+    _p2: c_int,
+    state: c_uint,
 }
 
 #[repr(C)]
@@ -178,11 +202,13 @@ union XEvent {
     key: XKeyEvent,
     button: XButtonEvent,
     motion: XMotionEvent,
+    crossing: XCrossingEvent,
     configure: XConfigureEvent,
     client_message: XClientMessageEvent,
     _pad: [c_long; 24],
 }
 
+// ── Misc C structs ────────────────────────────────────────────────────────────
 #[repr(C)]
 struct XSetWindowAttributes {
     background_pixmap: Pixmap,
@@ -228,15 +254,14 @@ struct XSizeHints {
     _pad: c_int,
 }
 
-// ── XColor ────────────────────────────────────────────────────────────────
 #[repr(C)]
 struct XColor {
     pixel: c_ulong,
     red: u16,
     green: u16,
     blue: u16,
-    flags: c_char,
-    pad: c_char,
+    flags: std::ffi::c_char,
+    pad: std::ffi::c_char,
 }
 
 #[repr(C)]
@@ -265,10 +290,11 @@ struct XGCValues {
     clip_y_origin: c_int,
     clip_mask: c_ulong,
     dash_offset: c_int,
-    dashes: c_char,
+    dashes: std::ffi::c_char,
     _p2: [u8; 3],
 }
 
+// ── X11 FFI ───────────────────────────────────────────────────────────────────
 #[link(name = "X11")]
 unsafe extern "C" {
     fn XOpenDisplay(name: *const c_char) -> *mut XDisplay;
@@ -367,6 +393,7 @@ unsafe extern "C" {
     ) -> c_int;
 }
 
+// ── PlatformWindow ────────────────────────────────────────────────────────────
 pub struct PlatformWindow {
     display: *mut XDisplay,
     window: XWindow,
@@ -383,9 +410,7 @@ impl PlatformWindow {
     pub fn new(config: &WindowConfig) -> Result<Self> {
         let display = unsafe { XOpenDisplay(std::ptr::null()) };
         if display.is_null() {
-            return Err(Error::Platform(
-                "XOpenDisplay failed — is $DISPLAY set?".into(),
-            ));
+            return Err(Error::NoDisplay);
         }
 
         let screen = unsafe { XDefaultScreen(display) };
@@ -397,6 +422,8 @@ impl PlatformWindow {
             | BUTTON_PRESS_MASK
             | BUTTON_RELEASE_MASK
             | POINTER_MOTION_MASK
+            | ENTER_WINDOW_MASK
+            | LEAVE_WINDOW_MASK
             | STRUCTURE_NOTIFY_MASK
             | FOCUS_CHANGE_MASK;
 
@@ -425,6 +452,7 @@ impl PlatformWindow {
             return Err(Error::Platform("XCreateWindow failed".into()));
         }
 
+        // ── Window title ──────────────────────────────────────────────────────
         let title_c = CString::new(config.title.as_str())
             .unwrap_or_else(|_| CString::new("windowed").unwrap());
         unsafe { XStoreName(display, window, title_c.as_ptr()) };
@@ -445,9 +473,11 @@ impl PlatformWindow {
             );
         }
 
+        // ── WM_DELETE_WINDOW protocol ─────────────────────────────────────────
         let mut wm_delete_window = intern_atom(display, b"WM_DELETE_WINDOW\0");
         unsafe { XSetWMProtocols(display, window, &mut wm_delete_window, 1) };
 
+        // ── Size hints (non-resizable) ────────────────────────────────────────
         if !config.resizable {
             let mut hints: XSizeHints = unsafe { std::mem::zeroed() };
             hints.flags = P_MIN_SIZE | P_MAX_SIZE;
@@ -456,6 +486,22 @@ impl PlatformWindow {
             hints.max_width = config.width as c_int;
             hints.max_height = config.height as c_int;
             unsafe { XSetWMNormalHints(display, window, &mut hints) };
+        } else {
+            let need_hints = config.min_size.is_some() || config.max_size.is_some();
+            if need_hints {
+                let mut hints: XSizeHints = unsafe { std::mem::zeroed() };
+                if let Some((w, h)) = config.min_size {
+                    hints.flags |= P_MIN_SIZE;
+                    hints.min_width = w as c_int;
+                    hints.min_height = h as c_int;
+                }
+                if let Some((w, h)) = config.max_size {
+                    hints.flags |= P_MAX_SIZE;
+                    hints.max_width = w as c_int;
+                    hints.max_height = h as c_int;
+                }
+                unsafe { XSetWMNormalHints(display, window, &mut hints) };
+            }
         }
 
         let blank_cursor = create_blank_cursor(display, root)?;
@@ -477,8 +523,6 @@ impl PlatformWindow {
     }
 
     pub fn run<F: FnMut(Event) -> ControlFlow>(&mut self, mut callback: F) -> Result<()> {
-        let mut polling = false;
-
         loop {
             while unsafe { XPending(self.display) } > 0 {
                 let mut ev: XEvent = unsafe { std::mem::zeroed() };
@@ -486,24 +530,16 @@ impl PlatformWindow {
                 if let Some(event) = self.translate_event(&ev) {
                     match callback(event) {
                         ControlFlow::Exit => return Ok(()),
-                        ControlFlow::Poll => polling = true,
-                        ControlFlow::WarpAndPoll(x, y) => {
-                            polling = true;
-                            self.warp_mouse(x, y);
-                        }
-                        ControlFlow::Continue => {}
+                        ControlFlow::WarpAndPoll(x, y) => self.warp_mouse(x, y),
+                        ControlFlow::Poll | ControlFlow::Continue => {}
                     }
                 }
             }
 
             match callback(Event::RedrawRequested) {
                 ControlFlow::Exit => return Ok(()),
-                ControlFlow::Poll => polling = true,
-                ControlFlow::WarpAndPoll(x, y) => {
-                    polling = true;
-                    self.warp_mouse(x, y);
-                }
-                ControlFlow::Continue => if !polling {},
+                ControlFlow::WarpAndPoll(x, y) => self.warp_mouse(x, y),
+                ControlFlow::Poll | ControlFlow::Continue => {}
             }
 
             unsafe { XFlush(self.display) };
@@ -557,6 +593,8 @@ impl PlatformWindow {
                 x: unsafe { ev.motion.x },
                 y: unsafe { ev.motion.y },
             }),
+            ENTER_NOTIFY => Some(Event::CursorEntered),
+            LEAVE_NOTIFY => Some(Event::CursorLeft),
             FOCUS_IN => Some(Event::FocusGained),
             FOCUS_OUT => Some(Event::FocusLost),
             _ => None,
@@ -638,6 +676,7 @@ impl HasDisplayHandle for PlatformWindow {
     }
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
 fn intern_atom(display: *mut XDisplay, name: &[u8]) -> Atom {
     unsafe { XInternAtom(display, name.as_ptr() as *const c_char, 0) }
 }
@@ -739,6 +778,8 @@ fn x11_keycode_to_key(code: u8) -> Key {
         105 => Key::RightCtrl,
         64 => Key::LeftAlt,
         108 => Key::RightAlt,
+        133 => Key::LeftSuper,
+        134 => Key::RightSuper,
         _ => Key::Unknown,
     }
 }
