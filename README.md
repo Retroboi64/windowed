@@ -12,7 +12,7 @@ No GPU context, no retained scene graph — just a window, an event loop, and ra
 |---|---|
 | Windows 10 / 11 | Win32 |
 | Linux | X11|
-| macOS | ❌ Not yet implemented |
+| macOS | Not Tested tho |
 
 ---
 
