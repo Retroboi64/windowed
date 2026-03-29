@@ -39,7 +39,7 @@ const VERTICES: [f32; 9] = [
 
 fn compile_shader(src: &[u8], kind: gl::types::GLenum) -> u32 {
     let shader = unsafe { gl::CreateShader(kind) };
-    let ptr    = src.as_ptr().cast::<i8>();
+    let ptr = src.as_ptr().cast::<i8>();
     unsafe { gl::ShaderSource(shader, 1, &ptr, std::ptr::null()) };
     unsafe { gl::CompileShader(shader) };
 
@@ -57,7 +57,11 @@ fn compile_shader(src: &[u8], kind: gl::types::GLenum) -> u32 {
 
 fn link_program(vert: u32, frag: u32) -> u32 {
     let program = unsafe { gl::CreateProgram() };
-    unsafe { gl::AttachShader(program, vert); gl::AttachShader(program, frag); gl::LinkProgram(program); }
+    unsafe {
+        gl::AttachShader(program, vert);
+        gl::AttachShader(program, frag);
+        gl::LinkProgram(program);
+    }
 
     let mut ok = 0i32;
     unsafe { gl::GetProgramiv(program, gl::LINK_STATUS, &mut ok) };
@@ -65,7 +69,9 @@ fn link_program(vert: u32, frag: u32) -> u32 {
         let mut len = 0i32;
         unsafe { gl::GetProgramiv(program, gl::INFO_LOG_LENGTH, &mut len) };
         let mut buf = vec![0u8; len as usize];
-        unsafe { gl::GetProgramInfoLog(program, len, std::ptr::null_mut(), buf.as_mut_ptr().cast()) };
+        unsafe {
+            gl::GetProgramInfoLog(program, len, std::ptr::null_mut(), buf.as_mut_ptr().cast())
+        };
         panic!("program link error: {}", String::from_utf8_lossy(&buf));
     }
     program
@@ -85,8 +91,8 @@ fn main() -> windowed::Result<()> {
 
     // ── Build GPU resources ───────────────────────────────────────────────────
     let (program, vao) = unsafe {
-        let vert    = compile_shader(VERTEX_SHADER_SRC,   VERTEX_SHADER);
-        let frag    = compile_shader(FRAGMENT_SHADER_SRC, FRAGMENT_SHADER);
+        let vert = compile_shader(VERTEX_SHADER_SRC, VERTEX_SHADER);
+        let frag = compile_shader(FRAGMENT_SHADER_SRC, FRAGMENT_SHADER);
         let program = link_program(vert, frag);
         gl::DeleteShader(vert);
         gl::DeleteShader(frag);
@@ -104,8 +110,14 @@ fn main() -> windowed::Result<()> {
             VERTICES.as_ptr().cast(),
             gl::STATIC_DRAW,
         );
-        gl::VertexAttribPointer(0, 3, gl::FLOAT, gl::FALSE,
-            (3 * std::mem::size_of::<f32>()) as i32, std::ptr::null());
+        gl::VertexAttribPointer(
+            0,
+            3,
+            gl::FLOAT,
+            gl::FALSE,
+            (3 * std::mem::size_of::<f32>()) as i32,
+            std::ptr::null(),
+        );
         gl::EnableVertexAttribArray(0);
         gl::BindBuffer(gl::ARRAY_BUFFER, 0);
         gl::BindVertexArray(0);
@@ -114,7 +126,7 @@ fn main() -> windowed::Result<()> {
 
     println!("Window created. Press Escape or close the window to quit.");
 
-    window.run(move |event| {
+    window.run(move |event, window| {
         match event {
             Event::CloseRequested => {
                 println!("Close requested — goodbye!");
@@ -135,7 +147,6 @@ fn main() -> windowed::Result<()> {
                 gl::BindVertexArray(vao);
                 gl::DrawArrays(gl::TRIANGLES, 0, 3);
 
-                // ↓ One call works on all three platforms.
                 window.swap_buffers();
             },
             _ => {}

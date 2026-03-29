@@ -35,3 +35,22 @@ pub use config::WindowConfig;
 pub use error::{Error, Result};
 pub use event::{ControlFlow, Event, Key, MouseButton};
 pub use window::Window;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_config_defaults() {
+        let config = WindowConfig::new("test").size(800, 600);
+        assert_eq!(config.width, 800);
+        assert_eq!(config.height, 600);
+        assert_eq!(config.resizable, true);
+    }
+
+    #[test]
+    fn control_flow_exit_variant() {
+        let cf = ControlFlow::Exit;
+        assert!(matches!(cf, ControlFlow::Exit));
+    }
+}

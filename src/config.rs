@@ -5,6 +5,7 @@ pub struct WindowConfig {
     pub height: u32,
     pub position: Option<(i32, i32)>,
     pub resizable: bool,
+    pub fullscreen: bool,
 
     pub min_size: Option<(u32, u32)>,
     pub max_size: Option<(u32, u32)>,
@@ -18,6 +19,7 @@ impl WindowConfig {
             height: 600,
             position: None,
             resizable: true,
+            fullscreen: false,
             min_size: None,
             max_size: None,
         }
@@ -36,6 +38,11 @@ impl WindowConfig {
 
     pub fn position(mut self, x: i32, y: i32) -> Self {
         self.position = Some((x, y));
+        self
+    }
+
+    pub fn fullscreen(mut self, is_fullscreen: bool) -> Self {
+        self.fullscreen = is_fullscreen;
         self
     }
 

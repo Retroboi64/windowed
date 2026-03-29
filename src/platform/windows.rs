@@ -122,8 +122,18 @@ const CW_USEDEFAULT: INT = 0x8000_0000u32 as INT;
 const SW_SHOW: INT = 5;
 const PM_REMOVE: UINT = 0x0001;
 const GWLP_USERDATA: INT = -21;
+const GWL_STYLE: INT = -16;
 const WHITE_BRUSH: INT = 0;
 const WHEEL_DELTA: i32 = 120;
+const WS_POPUP: DWORD = 0x8000_0000;
+const WS_VISIBLE: DWORD = 0x1000_0000;
+const MONITOR_DEFAULTTONEAREST: DWORD = 2;
+const SWP_NOSIZE: UINT = 0x0001;
+const SWP_NOMOVE: UINT = 0x0002;
+const SWP_NOZORDER: UINT = 0x0004;
+const SWP_NOOWNERZORDER: UINT = 0x0200;
+const SWP_FRAMECHANGED: UINT = 0x0020;
+const HWND_TOP: HWND = 0;
 
 const IDC_ARROW: *const u16 = 32512usize as *const u16;
 
@@ -191,10 +201,29 @@ unsafe extern "system" {
     fn GetClientRect(hWnd: HWND, lpRect: *mut RECT) -> BOOL;
     fn SetCursorPos(X: INT, Y: INT) -> BOOL;
     fn ShowCursor(bShow: BOOL) -> INT;
+    fn SetCapture(hWnd: HWND) -> HWND;
+    fn ReleaseCapture() -> BOOL;
+    fn ClipCursor(lpRect: *const RECT) -> BOOL;
+    fn ClientToScreen(hWnd: HWND, lpPoint: *mut POINT) -> BOOL;
     fn InvalidateRect(hWnd: HWND, lpRect: *const RECT, bErase: BOOL) -> BOOL;
     fn BeginPaint(hWnd: HWND, lpPaint: *mut PAINTSTRUCT) -> HANDLE;
     fn EndPaint(hWnd: HWND, lpPaint: *const PAINTSTRUCT) -> BOOL;
     fn TrackMouseEvent(lpEventTrack: *mut TRACKMOUSEEVENT) -> BOOL;
+    fn MonitorFromWindow(hwnd: HWND, dwFlags: DWORD) -> HMONITOR;
+    fn GetMonitorInfoW(hMonitor: HMONITOR, lpmi: *mut MONITORINFO) -> BOOL;
+    fn SetWindowPos(
+        hWnd: HWND,
+        hWndInsertAfter: HWND,
+        X: INT,
+        Y: INT,
+        cx: INT,
+        cy: INT,
+        uFlags: UINT,
+    ) -> BOOL;
+    fn GetWindowPlacement(hWnd: HWND, lpwndpl: *mut WINDOWPLACEMENT) -> BOOL;
+    fn SetWindowPlacement(hWnd: HWND, lpwndpl: *const WINDOWPLACEMENT) -> BOOL;
+    fn GetWindowLongW(hWnd: HWND, nIndex: INT) -> LONG;
+    fn SetWindowLongW(hWnd: HWND, nIndex: INT, dwNewLong: LONG) -> LONG;
 }
 
 #[link(name = "kernel32")]
@@ -205,6 +234,27 @@ unsafe extern "system" {
 #[link(name = "gdi32")]
 unsafe extern "system" {
     fn GetStockObject(fnObject: INT) -> HANDLE;
+}
+
+type HMONITOR = isize;
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct WINDOWPLACEMENT {
+    length: UINT,
+    flags: UINT,
+    showCmd: UINT,
+    ptMinPosition: POINT,
+    ptMaxPosition: POINT,
+    rcNormalPosition: RECT,
+}
+
+#[repr(C)]
+struct MONITORINFO {
+    cbSize: DWORD,
+    rcMonitor: RECT,
+    rcWork: RECT,
+    dwFlags: DWORD,
 }
 
 #[repr(C)]
@@ -229,6 +279,10 @@ pub struct PlatformWindow {
     state: Arc<Mutex<WindowState>>,
     width: u32,
     height: u32,
+    fullscreen: bool,
+    mouse_grabbed: bool,
+    saved_style: DWORD,
+    saved_placement: WINDOWPLACEMENT,
 }
 
 unsafe impl Send for PlatformWindow {}
@@ -292,7 +346,12 @@ unsafe extern "system" fn wnd_proc(
         }
 
         WM_KEYDOWN | WM_SYSKEYDOWN => {
-            push!(Event::KeyDown(vk_to_key(wparam as u16)));
+            // Bit 30 of lParam: 1 if key was already down before this message (auto-repeat).
+            let repeat = (lparam >> 30) & 1 != 0;
+            push!(Event::KeyDown {
+                key: vk_to_key(wparam as u16),
+                repeat,
+            });
             0
         }
         WM_KEYUP | WM_SYSKEYUP => {
@@ -493,6 +552,10 @@ impl PlatformWindow {
                 state,
                 width: config.width,
                 height: config.height,
+                fullscreen: false,
+                mouse_grabbed: false,
+                saved_style: 0,
+                saved_placement: unsafe { std::mem::zeroed() },
             })
         }
     }
@@ -576,6 +639,88 @@ impl PlatformWindow {
         let t = to_wide(&format!("{title}\0"));
         unsafe {
             SetWindowTextW(self.hwnd, t.as_ptr());
+        }
+    }
+
+    pub fn set_fullscreen(&mut self, is_fullscreen: bool) {
+        if self.fullscreen == is_fullscreen {
+            return;
+        }
+        self.fullscreen = is_fullscreen;
+        unsafe {
+            if is_fullscreen {
+                // Save current style and window placement so we can restore later.
+                self.saved_style = GetWindowLongW(self.hwnd, GWL_STYLE) as DWORD;
+                self.saved_placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as UINT;
+                GetWindowPlacement(self.hwnd, &mut self.saved_placement);
+
+                // Get the bounds of the monitor the window is currently on.
+                let monitor = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
+                let mut mi: MONITORINFO = std::mem::zeroed();
+                mi.cbSize = std::mem::size_of::<MONITORINFO>() as DWORD;
+                GetMonitorInfoW(monitor, &mut mi);
+                let r = mi.rcMonitor;
+
+                // Strip all chrome and cover the full monitor rectangle.
+                SetWindowLongW(self.hwnd, GWL_STYLE, (WS_POPUP | WS_VISIBLE) as LONG);
+                SetWindowPos(
+                    self.hwnd,
+                    HWND_TOP,
+                    r.left,
+                    r.top,
+                    r.right - r.left,
+                    r.bottom - r.top,
+                    SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+                );
+            } else {
+                // Restore the previous style and placement.
+                SetWindowLongW(self.hwnd, GWL_STYLE, self.saved_style as LONG);
+                SetWindowPos(
+                    self.hwnd,
+                    HWND_TOP,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
+                );
+                SetWindowPlacement(self.hwnd, &self.saved_placement);
+            }
+        }
+    }
+
+    pub fn set_mouse_grabbed(&mut self, grabbed: bool) {
+        if self.mouse_grabbed == grabbed {
+            return;
+        }
+        self.mouse_grabbed = grabbed;
+        unsafe {
+            if grabbed {
+                SetCapture(self.hwnd);
+                // Confine the cursor to the client area.
+                let mut rect: RECT = std::mem::zeroed();
+                GetClientRect(self.hwnd, &mut rect);
+                let mut tl = POINT {
+                    x: rect.left,
+                    y: rect.top,
+                };
+                let mut br = POINT {
+                    x: rect.right,
+                    y: rect.bottom,
+                };
+                ClientToScreen(self.hwnd, &mut tl);
+                ClientToScreen(self.hwnd, &mut br);
+                let screen_rect = RECT {
+                    left: tl.x,
+                    top: tl.y,
+                    right: br.x,
+                    bottom: br.y,
+                };
+                ClipCursor(&screen_rect);
+            } else {
+                ReleaseCapture();
+                ClipCursor(std::ptr::null());
+            }
         }
     }
 

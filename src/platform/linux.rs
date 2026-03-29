@@ -49,6 +49,8 @@ const ENTER_WINDOW_MASK: c_long = 1 << 4;
 const LEAVE_WINDOW_MASK: c_long = 1 << 5;
 const STRUCTURE_NOTIFY_MASK: c_long = 1 << 17;
 const FOCUS_CHANGE_MASK: c_long = 1 << 21;
+const SUBSTRUCTURE_REDIRECT_MASK: c_long = 1 << 20;
+const SUBSTRUCTURE_NOTIFY_MASK: c_long = 1 << 19;
 
 // ── XCreateWindow valuemask flags ────────────────────────────────────────────
 const CW_BACK_PIXEL: c_ulong = 1 << 1;
@@ -391,6 +393,13 @@ unsafe extern "C" {
         data: *const c_void,
         nelements: c_int,
     ) -> c_int;
+    fn XSendEvent(
+        display: *mut XDisplay,
+        w: XWindow,
+        propagate: Bool,
+        event_mask: c_long,
+        event_send: *mut XEvent,
+    ) -> Bool;
 }
 
 // ── PlatformWindow ────────────────────────────────────────────────────────────
@@ -398,6 +407,7 @@ pub struct PlatformWindow {
     display: *mut XDisplay,
     window: XWindow,
     screen: c_int,
+    fullscreen: bool,
     wm_delete_window: Atom,
     blank_cursor: Cursor,
     width: u32,
@@ -515,6 +525,7 @@ impl PlatformWindow {
             display,
             window,
             screen,
+            fullscreen: false,
             wm_delete_window,
             blank_cursor,
             width: config.width,
@@ -639,6 +650,35 @@ impl PlatformWindow {
                 PROP_MODE_REPLACE,
                 bytes.as_ptr() as *const c_void,
                 bytes.len() as c_int,
+            );
+            XFlush(self.display);
+        }
+    }
+
+    pub fn set_fullscreen(&self, is_fullscreen: bool) {
+        let net_wm_state = intern_atom(self.display, b"_NET_WM_STATE\0");
+        let net_wm_state_fullscreen = intern_atom(self.display, b"_NET_WM_STATE_FULLSCREEN\0");
+        let root = unsafe { XRootWindow(self.display, self.screen) };
+
+        let mut ev: XEvent = unsafe { std::mem::zeroed() };
+        unsafe {
+            ev.client_message.type_ = CLIENT_MESSAGE;
+            ev.client_message.window = self.window;
+            ev.client_message.message_type = net_wm_state;
+            ev.client_message.format = 32;
+            // data[0]: 0 = remove, 1 = add, 2 = toggle
+            ev.client_message.data[0] = if is_fullscreen { 1 } else { 0 };
+            ev.client_message.data[1] = net_wm_state_fullscreen as c_long;
+            ev.client_message.data[2] = 0;
+            ev.client_message.data[3] = 1; // source: normal application
+            ev.client_message.data[4] = 0;
+
+            XSendEvent(
+                self.display,
+                root,
+                0, // do not propagate
+                SUBSTRUCTURE_REDIRECT_MASK | SUBSTRUCTURE_NOTIFY_MASK,
+                &mut ev,
             );
             XFlush(self.display);
         }

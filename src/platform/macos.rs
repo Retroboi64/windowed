@@ -83,6 +83,7 @@ const NSWindowStyleMaskTitled: NSUInteger = 1 << 0;
 const NSWindowStyleMaskClosable: NSUInteger = 1 << 1;
 const NSWindowStyleMaskMiniaturizable: NSUInteger = 1 << 2;
 const NSWindowStyleMaskResizable: NSUInteger = 1 << 3;
+const NSWindowStyleMaskFullScreen: NSUInteger = 1 << 14;
 
 const NSBackingStoreBuffered: NSUInteger = 2;
 const NSApplicationActivationPolicyRegular: NSInteger = 0;
@@ -786,6 +787,16 @@ impl PlatformWindow {
         unsafe {
             msg1(self.window, sel!("setTitle:"), nsstring(title));
             pool_pop(pool);
+        }
+    }
+
+    pub fn set_fullscreen(&self, is_fullscreen: bool) {
+        unsafe {
+            let style = msg0_uint(self.window, sel!("styleMask"));
+            let currently_fullscreen = (style & NSWindowStyleMaskFullScreen) != 0;
+            if is_fullscreen != currently_fullscreen {
+                msg1(self.window, sel!("toggleFullScreen:"), std::ptr::null_mut());
+            }
         }
     }
 

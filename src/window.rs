@@ -159,8 +159,12 @@ impl Window {
         })
     }
 
-    pub fn run<F: FnMut(Event) -> ControlFlow>(&mut self, callback: F) -> Result<()> {
-        self.inner.run(callback)
+    pub fn run<F: FnMut(Event, &Self) -> ControlFlow>(&mut self, mut callback: F) -> Result<()> {
+        let self_ptr = self as *const Self;
+        self.inner.run(|event| {
+            let window_ref = unsafe { &*self_ptr };
+            callback(event, window_ref)
+        })
     }
 
     pub fn request_redraw(&self) {
@@ -169,6 +173,10 @@ impl Window {
 
     pub fn set_title(&self, title: &str) {
         self.inner.set_title(title);
+    }
+
+    pub fn set_fullscreen(&self, is_fullscreen: bool) {
+        self.inner.set_fullscreen(is_fullscreen);
     }
 
     pub fn warp_mouse(&self, x: i32, y: i32) {
@@ -189,7 +197,7 @@ impl Window {
     ///
     /// # Safety
     /// Must be called from the same thread that will issue GL commands.
-    pub unsafe fn create_gl_context(&mut self) {
+    pub unsafe fn create_gl_context(&self) {
         #[cfg(target_os = "linux")]
         unsafe {
             self.create_gl_context_linux()
@@ -213,6 +221,7 @@ impl Window {
     /// # Safety
     /// An OpenGL context must have been created via [`Self::create_gl_context`]
     /// and must still be current on this thread.
+
     pub unsafe fn swap_buffers(&self) {
         #[cfg(target_os = "linux")]
         unsafe {
@@ -328,7 +337,7 @@ impl Window {
     }
 
     #[cfg(target_os = "linux")]
-    fn linux_display_xid(&self) -> (*mut c_void, u64) {
+    pub fn linux_display_xid(&self) -> (*mut c_void, u64) {
         let raw_display = self
             .display_handle()
             .expect("failed to acquire display handle")
