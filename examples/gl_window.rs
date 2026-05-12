@@ -134,16 +134,16 @@ fn main() -> windowed::Result<()> {
         (program, vao)
     };
 
-    println!("Window created. Press Escape or close the window to quit.");
+    info!("Window created. Press Escape or close the window to quit.");
 
     window.run(move |event, window| {
         match event {
             Event::CloseRequested => {
-                println!("Close requested — goodbye!");
+                info!("Close requested — goodbye!");
                 return ControlFlow::Exit;
             }
             Event::KeyDown(Key::Escape) => {
-                println!("Escape pressed — goodbye!");
+                info!("Escape pressed — goodbye!");
                 return ControlFlow::Exit;
             }
             Event::Resized { width, height } => unsafe {
