@@ -314,7 +314,7 @@ impl Window {
         // GL_VERSION = 0x1F02
         let version = unsafe { get_string(0x1F02) };
         if version.is_null() {
-            #[cfg(feature = "probably_fine_log")]
+            #[cfg(feature = "log")]
             info!("glGetString(GL_VERSION) returned null — context may not be current")
         } else {
             #[cfg(feature = "log")]
