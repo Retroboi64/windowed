@@ -16,12 +16,12 @@ probably_fine_log = { version = "0.1.0", optional = true }
 [features]
 default = []
 opengl = ["gl"]
-log = ["log"]
+log = ["probably_fine_log"]
 
 [[example]]
 name = "simple_window"
 path = "examples/simple_window.rs"
-required-features = ["probably_fine_log"]
+required-features = ["log"]
 
 [[example]]
 name = "gl_window"
