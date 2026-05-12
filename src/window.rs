@@ -10,6 +10,9 @@ use crate::rwd::{
     RawWindowHandle, WindowHandle,
 };
 
+#[cfg(feature = "log")]
+use probably_fine_log::{error, info};
+
 // ── Platform GL back-ends ─────────────────────────────────────────────────────
 /// Win32 / WGL helpers (Windows only).
 #[cfg(target_os = "windows")]
@@ -265,9 +268,11 @@ impl Window {
         {
             let ctx = unsafe { glx::glXGetCurrentContext() };
             if ctx.is_null() {
-                println!("[windowed] No OpenGL context (glXGetCurrentContext returned null)");
+                #[cfg(feature = "log")]
+                info!("[windowed] No OpenGL context (glXGetCurrentContext returned null)");
             } else {
-                println!("[windowed] OpenGL context active (GLX): {ctx:p}");
+                #[cfg(feature = "log")]
+                info!("[windowed] OpenGL context active (GLX): {ctx:p}");
             }
         }
 
@@ -275,9 +280,11 @@ impl Window {
         {
             let ctx = unsafe { win_gl::wglGetCurrentContext() };
             if ctx.is_null() {
-                println!("[windowed] No OpenGL context (wglGetCurrentContext returned null)");
+                #[cfg(feature = "log")]
+                info!("[windowed] No OpenGL context (wglGetCurrentContext returned null)");
             } else {
-                println!("[windowed] OpenGL context active (WGL): {ctx:p}");
+                #[cfg(feature = "log")]
+                info!("[windowed] OpenGL context active (WGL): {ctx:p}");
             }
         }
 
@@ -285,9 +292,11 @@ impl Window {
         {
             let ctx = unsafe { cgl::get_current_context() };
             if ctx.is_null() {
-                println!("[windowed] No OpenGL context (CGLGetCurrentContext returned null)");
+                #[cfg(feature = "log")]
+                info!("[windowed] No OpenGL context (CGLGetCurrentContext returned null)");
             } else {
-                println!("[windowed] OpenGL context active (CGL): {ctx:p}");
+                #[cfg(feature = "log")]
+                info!("[windowed] OpenGL context active (CGL): {ctx:p}");
             }
         }
 
@@ -295,7 +304,8 @@ impl Window {
         let get_string: GlGetString = unsafe {
             let ptr = self.get_proc_address("glGetString");
             if ptr.is_null() {
-                println!("[windowed] glGetString not found — context may not be current");
+                #[cfg(feature = "probably_fine_log")]
+                info!("[windowed] glGetString not found — context may not be current");
                 return;
             }
             std::mem::transmute(ptr)
@@ -304,12 +314,13 @@ impl Window {
         // GL_VERSION = 0x1F02
         let version = unsafe { get_string(0x1F02) };
         if version.is_null() {
-            println!(
-                "[windowed] glGetString(GL_VERSION) returned null — context may not be current"
-            );
+            #[cfg(feature = "probably_fine_log")]
+            info!("glGetString(GL_VERSION) returned null — context may not be current")
         } else {
+            #[cfg(feature = "log")]
             let s = unsafe { std::ffi::CStr::from_ptr(version as *const i8) };
-            println!("[windowed] OpenGL version: {}", s.to_string_lossy());
+            #[cfg(feature = "log")]
+            info!("OpenGL version: {}", s.to_string_lossy());
         }
     }
 
@@ -347,9 +358,9 @@ impl Window {
             RawDisplayHandle::Xlib(h) => match h.display {
                 Some(ptr) => ptr.as_ptr() as *mut c_void,
                 None => {
-                    eprintln!(
-                        "[windowed] XlibDisplayHandle.display is None — \
-                         falling back to XOpenDisplay(NULL) ($DISPLAY)"
+                    #[cfg(feature = "log")]
+                    error!(
+                        "XlibDisplayHandle.display is None — falling back to XOpenDisplay(NULL) ($DISPLAY)"
                     );
                     let d = unsafe { glx::XOpenDisplay(std::ptr::null()) };
                     assert!(!d.is_null(), "XOpenDisplay(NULL) failed — is $DISPLAY set?");

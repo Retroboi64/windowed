@@ -12,6 +12,10 @@
 //! ```
 
 use gl::{FRAGMENT_SHADER, VERTEX_SHADER};
+
+#[cfg(feature = "log")]
+use probably_fine_log::{Level, StderrLogger, set_logger, set_max_level};
+
 use windowed::{ControlFlow, Event, Key, Window, WindowConfig};
 
 const VERTEX_SHADER_SRC: &[u8] = b"
@@ -78,6 +82,12 @@ fn link_program(vert: u32, frag: u32) -> u32 {
 }
 
 fn main() -> windowed::Result<()> {
+    // Optional: set up logging.
+    #[cfg(feature = "probably_fine_log")]
+    set_logger(StderrLogger::new()).unwrap();
+    #[cfg(feature = "probably_fine_log")]
+    set_max_level(Level::Debug);
+
     let config = WindowConfig::new("windowed — triangle")
         .size(800, 600)
         .resizable(true);
