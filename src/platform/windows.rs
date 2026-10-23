@@ -261,6 +261,7 @@ unsafe extern "system" {
     fn GetKeyState(nVirtKey: INT) -> i16;
     fn GetDpiForWindow(hwnd: HWND) -> UINT;
     fn SetProcessDpiAwarenessContext(value: isize) -> BOOL;
+    fn WaitMessage() -> BOOL;
 }
 
 #[link(name = "shell32")]
@@ -773,51 +774,70 @@ impl PlatformWindow {
         Ok(pw)
     }
 
-    pub fn run<F: FnMut(Event) -> ControlFlow>(&mut self, mut callback: F) -> Result<()> {
+    pub fn pump_events<F: FnMut(Event) -> ControlFlow>(
+        &mut self,
+        mut callback: F,
+    ) -> Result<ControlFlow> {
         let mut msg: MSG = unsafe { std::mem::zeroed() };
-        let mut polling = false;
+        // SAFETY: PeekMessageW pumps pending messages from the Win32 message queue.
+        unsafe {
+            while PeekMessageW(&mut msg, 0, 0, 0, PM_REMOVE) != 0 {
+                if msg.message == WM_QUIT {
+                    return Ok(ControlFlow::Exit);
+                }
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+
+        let events: Vec<Event> = {
+            let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::take(&mut s.events)
+        };
+
+        let mut cf = ControlFlow::Continue;
+        for event in events {
+            if let Event::Resized { width, height } = event {
+                self.width.store(width, Ordering::Relaxed);
+                self.height.store(height, Ordering::Relaxed);
+            }
+            match callback(event) {
+                ControlFlow::Exit => return Ok(ControlFlow::Exit),
+                ControlFlow::WarpAndPoll(x, y) => {
+                    self.warp_mouse(x, y);
+                    cf = ControlFlow::Poll;
+                }
+                ControlFlow::Poll => cf = ControlFlow::Poll,
+                ControlFlow::Wait => cf = ControlFlow::Wait,
+                ControlFlow::Continue => {}
+            }
+        }
+
+        Ok(cf)
+    }
+
+    pub fn run<F: FnMut(Event) -> ControlFlow>(&mut self, mut callback: F) -> Result<()> {
+        let mut flow = ControlFlow::Continue;
 
         loop {
-            // SAFETY: PeekMessageW pumps pending messages from the Win32 message queue.
-            unsafe {
-                while PeekMessageW(&mut msg, 0, 0, 0, PM_REMOVE) != 0 {
-                    if msg.message == WM_QUIT {
-                        return Ok(());
-                    }
-                    TranslateMessage(&msg);
-                    DispatchMessageW(&msg);
-                }
+            let res = self.pump_events(&mut callback)?;
+            match res {
+                ControlFlow::Exit => return Ok(()),
+                ControlFlow::Poll | ControlFlow::WarpAndPoll(_, _) => flow = ControlFlow::Poll,
+                ControlFlow::Wait => flow = ControlFlow::Wait,
+                ControlFlow::Continue => {}
             }
 
-            let events: Vec<Event> = {
-                let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                std::mem::take(&mut s.events)
-            };
-
-            let mut want_poll = false;
-            for event in events {
-                if let Event::Resized { width, height } = event {
-                    self.width.store(width, Ordering::Relaxed);
-                    self.height.store(height, Ordering::Relaxed);
-                }
-                match callback(event) {
-                    ControlFlow::Exit => return Ok(()),
-                    ControlFlow::Poll => want_poll = true,
-                    ControlFlow::WarpAndPoll(x, y) => {
-                        want_poll = true;
-                        self.warp_mouse(x, y);
-                    }
-                    ControlFlow::Continue => {}
-                }
-            }
-            if want_poll {
-                polling = true;
-            }
-            if polling {
+            if flow == ControlFlow::Poll {
                 self.request_redraw();
+                std::thread::yield_now();
+            } else {
+                // In Wait/Continue mode, idle until a message arrives.
+                // SAFETY: WaitMessage blocks until an input or window message arrives.
+                unsafe {
+                    WaitMessage();
+                }
             }
-
-            std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
 

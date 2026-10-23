@@ -191,6 +191,23 @@ impl Window {
         })
     }
 
+    /// Process all currently pending events from the OS event queue without blocking.
+    ///
+    /// Returns ControlFlow::Exit if a close/quit request occurred or the callback
+    /// requested exit, otherwise returns the most recent ControlFlow (e.g. ControlFlow::Poll or ControlFlow::Wait).
+    pub fn pump_events<F: FnMut(Event, &Self) -> ControlFlow>(
+        &mut self,
+        mut callback: F,
+    ) -> Result<ControlFlow> {
+        let self_ptr = self as *const Self;
+        self.inner.pump_events(|event| {
+            // SAFETY: The Window instance outlives the pump_events call and is not mutated
+            // during the callback execution.
+            let window_ref = unsafe { &*self_ptr };
+            callback(event, window_ref)
+        })
+    }
+
     pub fn request_redraw(&self) {
         self.inner.request_redraw();
     }

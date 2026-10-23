@@ -603,85 +603,118 @@ impl PlatformWindow {
         }
     }
 
-    pub fn run<F: FnMut(Event) -> ControlFlow>(&mut self, mut callback: F) -> Result<()> {
+    pub fn pump_events<F: FnMut(Event) -> ControlFlow>(
+        &mut self,
+        mut callback: F,
+    ) -> Result<ControlFlow> {
+        let pool = unsafe { pool_push() };
+        let mut cf = ControlFlow::Continue;
+
         loop {
-            let pool = unsafe { pool_push() };
-
-            loop {
-                let event = unsafe {
-                    next_event(
-                        self.app,
-                        NSEventMaskAny,
-                        std::ptr::null_mut(),
-                        self.run_loop_mode,
-                        YES,
-                    )
-                };
-                if event.is_null() {
-                    break;
-                }
-
-                if let Some(ev) = self.translate_event(event) {
-                    let cf = callback(ev);
-                    if let Some(r) = self.handle_cf(cf) {
-                        unsafe { pool_pop(pool) };
-                        return r;
-                    }
-                }
-
-                unsafe { msg1(self.app, sel!("sendEvent:"), event) };
-            }
-
-            let delegate_events: Vec<Event> = {
-                let mut s = self.state.lock().unwrap();
-                std::mem::take(&mut s.events)
+            let event = unsafe {
+                next_event(
+                    self.app,
+                    NSEventMaskAny,
+                    std::ptr::null_mut(),
+                    self.run_loop_mode,
+                    YES,
+                )
             };
-            for ev in delegate_events {
-                let cf = callback(ev);
-                if let Some(r) = self.handle_cf(cf) {
-                    unsafe { pool_pop(pool) };
-                    return r;
+            if event.is_null() {
+                break;
+            }
+
+            if let Some(ev) = self.translate_event(event) {
+                match callback(ev) {
+                    ControlFlow::Exit => {
+                        unsafe { pool_pop(pool) };
+                        return Ok(ControlFlow::Exit);
+                    }
+                    ControlFlow::WarpAndPoll(x, y) => {
+                        self.warp_mouse(x, y);
+                        cf = ControlFlow::Poll;
+                    }
+                    ControlFlow::Poll => cf = ControlFlow::Poll,
+                    ControlFlow::Wait => cf = ControlFlow::Wait,
+                    ControlFlow::Continue => {}
                 }
             }
 
-            let bounds = unsafe { view_bounds(self.view) };
-            let w = bounds.size.width as u32;
-            let h = bounds.size.height as u32;
-            if (w != self.width || h != self.height) && w > 0 && h > 0 {
-                self.width = w;
-                self.height = h;
-                let cf = callback(Event::Resized {
-                    width: w,
-                    height: h,
-                });
-                if let Some(r) = self.handle_cf(cf) {
-                    unsafe { pool_pop(pool) };
-                    return r;
-                }
-            }
-
-            let cf = callback(Event::RedrawRequested);
-            if let Some(r) = self.handle_cf(cf) {
-                unsafe { pool_pop(pool) };
-                return r;
-            }
-
-            unsafe { msg0(self.app, sel!("updateWindows")) };
-            unsafe { pool_pop(pool) };
-
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            unsafe { msg1(self.app, sel!("sendEvent:"), event) };
         }
+
+        let delegate_events: Vec<Event> = {
+            let mut s = self.state.lock().unwrap();
+            std::mem::take(&mut s.events)
+        };
+        for ev in delegate_events {
+            match callback(ev) {
+                ControlFlow::Exit => {
+                    unsafe { pool_pop(pool) };
+                    return Ok(ControlFlow::Exit);
+                }
+                ControlFlow::WarpAndPoll(x, y) => {
+                    self.warp_mouse(x, y);
+                    cf = ControlFlow::Poll;
+                }
+                ControlFlow::Poll => cf = ControlFlow::Poll,
+                ControlFlow::Wait => cf = ControlFlow::Wait,
+                ControlFlow::Continue => {}
+            }
+        }
+
+        let bounds = unsafe { view_bounds(self.view) };
+        let w = bounds.size.width as u32;
+        let h = bounds.size.height as u32;
+        if (w != self.width || h != self.height) && w > 0 && h > 0 {
+            self.width = w;
+            self.height = h;
+            match callback(Event::Resized {
+                width: w,
+                height: h,
+            }) {
+                ControlFlow::Exit => {
+                    unsafe { pool_pop(pool) };
+                    return Ok(ControlFlow::Exit);
+                }
+                ControlFlow::WarpAndPoll(x, y) => {
+                    self.warp_mouse(x, y);
+                    cf = ControlFlow::Poll;
+                }
+                ControlFlow::Poll => cf = ControlFlow::Poll,
+                ControlFlow::Wait => cf = ControlFlow::Wait,
+                ControlFlow::Continue => {}
+            }
+        }
+
+        unsafe { msg0(self.app, sel!("updateWindows")) };
+        unsafe { pool_pop(pool) };
+
+        Ok(cf)
     }
 
-    fn handle_cf(&mut self, cf: ControlFlow) -> Option<Result<()>> {
-        match cf {
-            ControlFlow::Exit => Some(Ok(())),
-            ControlFlow::WarpAndPoll(x, y) => {
-                self.warp_mouse(x, y);
-                None
+    pub fn run<F: FnMut(Event) -> ControlFlow>(&mut self, mut callback: F) -> Result<()> {
+        let mut flow = ControlFlow::Continue;
+
+        loop {
+            let res = self.pump_events(&mut callback)?;
+            match res {
+                ControlFlow::Exit => return Ok(()),
+                ControlFlow::Poll | ControlFlow::WarpAndPoll(_, _) => flow = ControlFlow::Poll,
+                ControlFlow::Wait => flow = ControlFlow::Wait,
+                ControlFlow::Continue => {}
             }
-            ControlFlow::Poll => None,
-            ControlFlow::Continue => None,
+
+            if flow == ControlFlow::Poll {
+                match callback(Event::RedrawRequested) {
+                    ControlFlow::Exit => return Ok(()),
+                    ControlFlow::WarpAndPoll(x, y) => self.warp_mouse(x, y),
+                    _ => {}
+                }
+                std::thread::yield_now();
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
         }
     }
 

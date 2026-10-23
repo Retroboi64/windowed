@@ -1,4 +1,4 @@
-//! Event definitions and key codes.
+﻿//! Event definitions and key codes.
 
 use std::path::PathBuf;
 
@@ -108,6 +108,7 @@ impl Modifiers {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ControlFlow {
     Continue,
+    Wait,
     Poll,
     WarpAndPoll(i32, i32),
     Exit,
