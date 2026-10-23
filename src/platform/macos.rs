@@ -934,6 +934,43 @@ impl PlatformWindow {
 
     pub fn set_cursor_grab(&self, _grab: bool) {}
 
+    pub fn set_clipboard_text(&self, text: &str) -> Result<()> {
+        let pool = unsafe { pool_push() };
+        unsafe {
+            let pboard = msg0(cls!("NSPasteboard"), sel!("generalPasteboard"));
+            msg0(pboard, sel!("clearContents"));
+            let str_type = nsstring("public.utf8-plain-text");
+            let str_obj = nsstring(text);
+            let f: unsafe extern "C" fn(id, SEL, id, id) -> BOOL = std::mem::transmute(objc_msgSend as usize);
+            f(pboard, sel!("setString:forType:"), str_obj, str_type);
+            pool_pop(pool);
+        }
+        Ok(())
+    }
+
+    pub fn get_clipboard_text(&self) -> Result<String> {
+        let pool = unsafe { pool_push() };
+        let s = unsafe {
+            let pboard = msg0(cls!("NSPasteboard"), sel!("generalPasteboard"));
+            let str_type = nsstring("public.utf8-plain-text");
+            let f: unsafe extern "C" fn(id, SEL, id) -> id = std::mem::transmute(objc_msgSend as usize);
+            let str_obj = f(pboard, sel!("stringForType:"), str_type);
+            if str_obj.is_null() {
+                pool_pop(pool);
+                return Ok(String::new());
+            }
+            let utf8_ptr = msg0(str_obj, sel!("UTF8String")) as *const c_char;
+            let res = if !utf8_ptr.is_null() {
+                std::ffi::CStr::from_ptr(utf8_ptr).to_string_lossy().into_owned()
+            } else {
+                String::new()
+            };
+            pool_pop(pool);
+            res
+        };
+        Ok(s)
+    }
+
     pub fn scale_factor(&self) -> f64 {
         unsafe { msg0_f64(self.window, sel!("backingScaleFactor")) }
     }

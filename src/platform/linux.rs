@@ -409,6 +409,7 @@ unsafe extern "C" {
         time: c_ulong,
     ) -> c_int;
     fn XUngrabPointer(display: *mut XDisplay, time: c_ulong) -> c_int;
+    fn XSetSelectionOwner(display: *mut XDisplay, selection: Atom, owner: XWindow, time: c_ulong) -> c_int;
     fn XSendEvent(
         display: *mut XDisplay,
         w: XWindow,

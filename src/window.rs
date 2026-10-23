@@ -256,6 +256,16 @@ impl Window {
         self.inner.scale_factor()
     }
 
+    /// Sets the system clipboard text content.
+    pub fn set_clipboard_text(&self, text: &str) -> Result<()> {
+        self.inner.set_clipboard_text(text)
+    }
+
+    /// Gets the system clipboard text content.
+    pub fn get_clipboard_text(&self) -> Result<String> {
+        self.inner.get_clipboard_text()
+    }
+
     pub fn inner_size(&self) -> (u32, u32) {
         self.inner.inner_size()
     }

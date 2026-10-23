@@ -1,4 +1,4 @@
-﻿//! **windowed** — a minimal, zero-dependency, cross-platform windowing library.
+//! **windowed** — a minimal, zero-dependency, cross-platform windowing library.
 //!
 //! Supports:
 //! - Windows (Win32)
@@ -36,6 +36,9 @@ pub use error::{Error, Result};
 pub use event::{ControlFlow, Event, Key, Modifiers, MouseButton};
 pub use window::Window;
 
+#[cfg(feature = "raw-window-handle")]
+pub use raw_window_handle;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,6 +61,3 @@ mod tests {
         assert!(matches!(cf, ControlFlow::Exit));
     }
 }
-
-#[cfg(feature = "raw-window-handle")]
-pub use raw_window_handle;

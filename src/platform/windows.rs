@@ -261,6 +261,12 @@ unsafe extern "system" {
     fn GetKeyState(nVirtKey: INT) -> i16;
     fn GetDpiForWindow(hwnd: HWND) -> UINT;
     fn SetProcessDpiAwarenessContext(value: isize) -> BOOL;
+    fn OpenClipboard(hWndNewOwner: HWND) -> BOOL;
+    fn CloseClipboard() -> BOOL;
+    fn EmptyClipboard() -> BOOL;
+    fn GetClipboardData(uFormat: UINT) -> HANDLE;
+    fn SetClipboardData(uFormat: UINT, hMem: HANDLE) -> HANDLE;
+    fn IsClipboardFormatAvailable(format: UINT) -> BOOL;
     fn WaitMessage() -> BOOL;
 }
 
@@ -275,6 +281,9 @@ unsafe extern "system" {
 unsafe extern "system" {
     fn GetModuleHandleW(lpModuleName: *const u16) -> HINSTANCE;
     fn GetLastError() -> DWORD;
+    fn GlobalAlloc(uFlags: UINT, dwBytes: usize) -> HANDLE;
+    fn GlobalLock(hMem: HANDLE) -> *mut c_void;
+    fn GlobalUnlock(hMem: HANDLE) -> BOOL;
 }
 
 #[link(name = "gdi32")]
@@ -1020,6 +1029,64 @@ impl PlatformWindow {
                 ReleaseCapture();
                 ClipCursor(std::ptr::null());
             }
+        }
+    }
+
+    pub fn set_clipboard_text(&self, text: &str) -> Result<()> {
+        const CF_UNICODETEXT: UINT = 13;
+        const GMEM_MOVEABLE: UINT = 0x0002;
+        let wide = to_wide(text);
+        let bytes = wide.len() * std::mem::size_of::<u16>();
+        // SAFETY: Allocating global memory and assigning to Win32 clipboard.
+        unsafe {
+            if OpenClipboard(self.hwnd) == 0 {
+                return Err(Error::Platform("OpenClipboard failed".into()));
+            }
+            EmptyClipboard();
+            let hmem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+            if hmem != 0 {
+                let ptr = GlobalLock(hmem) as *mut u16;
+                if !ptr.is_null() {
+                    std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+                    GlobalUnlock(hmem);
+                    SetClipboardData(CF_UNICODETEXT, hmem);
+                }
+            }
+            CloseClipboard();
+        }
+        Ok(())
+    }
+
+    pub fn get_clipboard_text(&self) -> Result<String> {
+        const CF_UNICODETEXT: UINT = 13;
+        // SAFETY: Reading unicode string from Win32 clipboard.
+        unsafe {
+            if IsClipboardFormatAvailable(CF_UNICODETEXT) == 0 {
+                return Ok(String::new());
+            }
+            if OpenClipboard(self.hwnd) == 0 {
+                return Err(Error::Platform("OpenClipboard failed".into()));
+            }
+            let hdata = GetClipboardData(CF_UNICODETEXT);
+            let result = if hdata != 0 {
+                let ptr = GlobalLock(hdata) as *const u16;
+                if !ptr.is_null() {
+                    let mut len = 0;
+                    while *ptr.add(len) != 0 {
+                        len += 1;
+                    }
+                    let slice = std::slice::from_raw_parts(ptr, len);
+                    let s = String::from_utf16_lossy(slice);
+                    GlobalUnlock(hdata);
+                    s
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+            CloseClipboard();
+            Ok(result)
         }
     }
 
