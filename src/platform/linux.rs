@@ -11,7 +11,7 @@ use std::ptr::NonNull;
 
 use crate::config::WindowConfig;
 use crate::error::{Error, Result};
-use crate::event::{ControlFlow, Event, Key, MouseButton};
+use crate::event::{ControlFlow, Event, Key, Modifiers, MouseButton};
 use crate::rwd::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, WindowHandle, XlibDisplayHandle, XlibWindowHandle,
@@ -393,6 +393,22 @@ unsafe extern "C" {
         data: *const c_void,
         nelements: c_int,
     ) -> c_int;
+    fn XResizeWindow(display: *mut XDisplay, w: XWindow, width: c_uint, height: c_uint) -> c_int;
+    fn XMoveWindow(display: *mut XDisplay, w: XWindow, x: c_int, y: c_int) -> c_int;
+    fn XUnmapWindow(display: *mut XDisplay, w: XWindow) -> c_int;
+    fn XIconifyWindow(display: *mut XDisplay, w: XWindow, screen_number: c_int) -> c_int;
+    fn XGrabPointer(
+        display: *mut XDisplay,
+        grab_window: XWindow,
+        owner_events: Bool,
+        event_mask: c_uint,
+        pointer_mode: c_int,
+        keyboard_mode: c_int,
+        confine_to: XWindow,
+        cursor: Cursor,
+        time: c_ulong,
+    ) -> c_int;
+    fn XUngrabPointer(display: *mut XDisplay, time: c_ulong) -> c_int;
     fn XSendEvent(
         display: *mut XDisplay,
         w: XWindow,
@@ -604,8 +620,8 @@ impl PlatformWindow {
                 x: unsafe { ev.motion.x },
                 y: unsafe { ev.motion.y },
             }),
-            ENTER_NOTIFY => Some(Event::CursorEntered),
-            LEAVE_NOTIFY => Some(Event::CursorLeft),
+            ENTER_NOTIFY => Some(Event::MouseEnter),
+            LEAVE_NOTIFY => Some(Event::MouseLeave),
             FOCUS_IN => Some(Event::FocusGained),
             FOCUS_OUT => Some(Event::FocusLost),
             _ => None,

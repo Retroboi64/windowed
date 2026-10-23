@@ -1,4 +1,4 @@
-//! OpenGL example — renders an orange triangle in a windowed context.
+﻿//! OpenGL example — renders an orange triangle in a windowed context.
 //!
 //! Uses the `opengl` feature flag and the `gl` crate for function loading.
 //! Buffer swapping is handled via `window.swap_buffers()` rather than calling
@@ -14,7 +14,7 @@
 use gl::{FRAGMENT_SHADER, VERTEX_SHADER};
 
 #[cfg(feature = "log")]
-use probably_fine_log::{Level, StderrLogger, set_logger, set_max_level};
+use probably_fine_log::{info, Level, StderrLogger, set_logger, set_max_level};
 
 use windowed::{ControlFlow, Event, Key, Window, WindowConfig};
 
@@ -83,9 +83,9 @@ fn link_program(vert: u32, frag: u32) -> u32 {
 
 fn main() -> windowed::Result<()> {
     // Optional: set up logging.
-    #[cfg(feature = "probably_fine_log")]
+    #[cfg(feature = "log")]
     set_logger(StderrLogger::new()).unwrap();
-    #[cfg(feature = "probably_fine_log")]
+    #[cfg(feature = "log")]
     set_max_level(Level::Debug);
 
     let config = WindowConfig::new("windowed — triangle")
@@ -142,7 +142,7 @@ fn main() -> windowed::Result<()> {
                 info!("Close requested — goodbye!");
                 return ControlFlow::Exit;
             }
-            Event::KeyDown(Key::Escape) => {
+            Event::KeyDown { key: Key::Escape, .. } => {
                 info!("Escape pressed — goodbye!");
                 return ControlFlow::Exit;
             }

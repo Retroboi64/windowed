@@ -15,9 +15,9 @@
 //! fn main() -> windowed::Result<()> {
 //!     let mut window = Window::new(WindowConfig::new("Hello").size(800, 600))?;
 //!     window.run(|event, _window| match event {
-//!         Event::CloseRequested         => ControlFlow::Exit,
-//!         Event::KeyDown(Key::Escape)   => ControlFlow::Exit,
-//!         _                             => ControlFlow::Continue,
+//!         Event::CloseRequested => ControlFlow::Exit,
+//!         Event::KeyDown { key: Key::Escape, .. } => ControlFlow::Exit,
+//!         _ => ControlFlow::Continue,
 //!     })
 //! }
 //! ```
@@ -33,7 +33,7 @@ pub mod window;
 
 pub use config::WindowConfig;
 pub use error::{Error, Result};
-pub use event::{ControlFlow, Event, Key, MouseButton};
+pub use event::{ControlFlow, Event, Key, Modifiers, MouseButton};
 pub use window::Window;
 
 #[cfg(test)]
@@ -46,6 +46,10 @@ mod tests {
         assert_eq!(config.width, 800);
         assert_eq!(config.height, 600);
         assert!(config.resizable);
+        assert!(config.decorations);
+        assert!(!config.always_on_top);
+        assert!(!config.transparent);
+        assert!(config.visible);
     }
 
     #[test]

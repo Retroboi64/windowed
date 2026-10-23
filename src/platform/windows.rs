@@ -7,12 +7,13 @@
 )]
 
 use std::ffi::c_void;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::config::WindowConfig;
 use crate::error::{Error, Result};
-use crate::event::{ControlFlow, Event, Key, MouseButton};
+use crate::event::{ControlFlow, Event, Key, Modifiers, MouseButton};
 use crate::rwd::{
     DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
     RawWindowHandle, Win32WindowHandle, WindowHandle, WindowsDisplayHandle,
@@ -86,13 +87,24 @@ struct PAINTSTRUCT {
     rgbReserved: [u8; 32],
 }
 
+#[repr(C)]
+struct MINMAXINFO {
+    ptReserved: POINT,
+    ptMaxSize: POINT,
+    ptMaxPosition: POINT,
+    ptMinTrackSize: POINT,
+    ptMaxTrackSize: POINT,
+}
+
 const WM_DESTROY: UINT = 0x0002;
+const WM_MOVE: UINT = 0x0003;
 const WM_SIZE: UINT = 0x0005;
 const WM_SETFOCUS: UINT = 0x0007;
 const WM_KILLFOCUS: UINT = 0x0008;
 const WM_CLOSE: UINT = 0x0010;
 const WM_QUIT: UINT = 0x0012;
 const WM_PAINT: UINT = 0x000F;
+const WM_GETMINMAXINFO: UINT = 0x0024;
 const WM_KEYDOWN: UINT = 0x0100;
 const WM_KEYUP: UINT = 0x0101;
 const WM_CHAR: UINT = 0x0102;
@@ -106,6 +118,8 @@ const WM_RBUTTONUP: UINT = 0x0205;
 const WM_MBUTTONDOWN: UINT = 0x0207;
 const WM_MBUTTONUP: UINT = 0x0208;
 const WM_MOUSEWHEEL: UINT = 0x020A;
+const WM_DROPFILES: UINT = 0x0233;
+const WM_DPICHANGED: UINT = 0x02E0;
 const WM_MOUSELEAVE: UINT = 0x02A3;
 const WM_MOUSEHOVER: UINT = 0x02A1;
 
@@ -122,8 +136,16 @@ const WS_MAXIMIZEBOX: DWORD = 0x0001_0000;
 const WS_OVERLAPPEDWINDOW: DWORD =
     WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
 
+const WS_EX_TOPMOST: DWORD = 0x0000_0008;
+const WS_EX_LAYERED: DWORD = 0x0008_0000;
+
 const CW_USEDEFAULT: INT = 0x8000_0000u32 as INT;
+const SW_HIDE: INT = 0;
+const SW_MAXIMIZE: INT = 3;
 const SW_SHOW: INT = 5;
+const SW_MINIMIZE: INT = 6;
+const SW_RESTORE: INT = 9;
+
 const PM_REMOVE: UINT = 0x0001;
 const GWLP_USERDATA: INT = -21;
 const GWL_STYLE: INT = -16;
@@ -135,12 +157,20 @@ const MONITOR_DEFAULTTONEAREST: DWORD = 2;
 const SWP_NOSIZE: UINT = 0x0001;
 const SWP_NOMOVE: UINT = 0x0002;
 const SWP_NOZORDER: UINT = 0x0004;
-const SWP_NOOWNERZORDER: UINT = 0x0200;
+const SWP_NOACTIVATE: UINT = 0x0010;
 const SWP_FRAMECHANGED: UINT = 0x0020;
+const SWP_NOOWNERZORDER: UINT = 0x0200;
 const HWND_TOP: HWND = 0;
+
+const SIZE_RESTORED: WPARAM = 0;
+const SIZE_MINIMIZED: WPARAM = 1;
+const SIZE_MAXIMIZED: WPARAM = 2;
 
 const IDC_ARROW: *const u16 = 32512usize as *const u16;
 
+const VK_SHIFT: i32 = 0x10;
+const VK_CONTROL: i32 = 0x11;
+const VK_MENU: i32 = 0x12;
 const VK_BACK: u16 = 0x08;
 const VK_TAB: u16 = 0x09;
 const VK_RETURN: u16 = 0x0D;
@@ -228,6 +258,16 @@ unsafe extern "system" {
     fn SetWindowPlacement(hWnd: HWND, lpwndpl: *const WINDOWPLACEMENT) -> BOOL;
     fn GetWindowLongW(hWnd: HWND, nIndex: INT) -> LONG;
     fn SetWindowLongW(hWnd: HWND, nIndex: INT, dwNewLong: LONG) -> LONG;
+    fn GetKeyState(nVirtKey: INT) -> i16;
+    fn GetDpiForWindow(hwnd: HWND) -> UINT;
+    fn SetProcessDpiAwarenessContext(value: isize) -> BOOL;
+}
+
+#[link(name = "shell32")]
+unsafe extern "system" {
+    fn DragAcceptFiles(hWnd: HWND, fAccept: BOOL);
+    fn DragQueryFileW(hDrop: HANDLE, iFile: UINT, lpszFile: *mut u16, cch: UINT) -> UINT;
+    fn DragFinish(hDrop: HANDLE);
 }
 
 #[link(name = "kernel32")]
@@ -276,6 +316,9 @@ const TME_HOVER: DWORD = 0x0000_0001;
 struct WindowState {
     events: Vec<Event>,
     tracking_mouse: bool,
+    is_minimized: bool,
+    min_size: Option<(u32, u32)>,
+    max_size: Option<(u32, u32)>,
 }
 
 #[derive(Default)]
@@ -297,6 +340,19 @@ pub struct PlatformWindow {
 
 unsafe impl Send for PlatformWindow {}
 unsafe impl Sync for PlatformWindow {}
+
+unsafe fn current_modifiers() -> Modifiers {
+    // SAFETY: GetKeyState queries current key states synchronously.
+    unsafe {
+        Modifiers {
+            shift: (GetKeyState(VK_SHIFT) as u16 & 0x8000) != 0,
+            ctrl: (GetKeyState(VK_CONTROL) as u16 & 0x8000) != 0,
+            alt: (GetKeyState(VK_MENU) as u16 & 0x8000) != 0,
+            super_key: ((GetKeyState(VK_LWIN as i32) as u16 & 0x8000) != 0)
+                || ((GetKeyState(VK_RWIN as i32) as u16 & 0x8000) != 0),
+        }
+    }
+}
 
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
@@ -340,14 +396,53 @@ unsafe extern "system" fn wnd_proc(
             0
         }
 
+        WM_MOVE => {
+            let x = (lparam & 0xFFFF) as i16 as i32;
+            let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
+            push!(Event::Moved { x, y });
+            0
+        }
+
         WM_SIZE => {
             let w = (lparam & 0xFFFF) as u32;
             let h = ((lparam >> 16) & 0xFFFF) as u32;
-            if w > 0 && h > 0 {
-                push!(Event::Resized {
-                    width: w,
-                    height: h
-                });
+
+            if let Ok(mut s) = state.lock() {
+                if wparam == SIZE_MINIMIZED {
+                    if !s.is_minimized {
+                        s.is_minimized = true;
+                        s.events.push(Event::Minimized);
+                    }
+                } else if (wparam == SIZE_RESTORED || wparam == SIZE_MAXIMIZED) && s.is_minimized {
+                    s.is_minimized = false;
+                    s.events.push(Event::Restored);
+                }
+                if w > 0 && h > 0 {
+                    s.events.push(Event::Resized {
+                        width: w,
+                        height: h,
+                    });
+                }
+            }
+            0
+        }
+
+        WM_GETMINMAXINFO => {
+            if let Ok(s) = state.lock() {
+                let mmi = lparam as *mut MINMAXINFO;
+                if !mmi.is_null() {
+                    // SAFETY: Pointer is valid as provided by Windows message.
+                    unsafe {
+                        if let Some((min_w, min_h)) = s.min_size {
+                            (*mmi).ptMinTrackSize.x = min_w as LONG;
+                            (*mmi).ptMinTrackSize.y = min_h as LONG;
+                        }
+                        if let Some((max_w, max_h)) = s.max_size {
+                            (*mmi).ptMaxTrackSize.x = max_w as LONG;
+                            (*mmi).ptMaxTrackSize.y = max_h as LONG;
+                        }
+                    }
+                }
             }
             0
         }
@@ -364,11 +459,21 @@ unsafe extern "system" fn wnd_proc(
         }
 
         WM_KEYDOWN | WM_SYSKEYDOWN => {
-            push!(Event::KeyDown(vk_to_key(wparam as u16)));
+            let repeat = (lparam >> 30) & 1 != 0;
+            let modifiers = unsafe { current_modifiers() };
+            push!(Event::KeyDown {
+                key: vk_to_key(wparam as u16),
+                repeat,
+                modifiers,
+            });
             0
         }
         WM_KEYUP | WM_SYSKEYUP => {
-            push!(Event::KeyUp(vk_to_key(wparam as u16)));
+            let modifiers = unsafe { current_modifiers() };
+            push!(Event::KeyUp {
+                key: vk_to_key(wparam as u16),
+                modifiers,
+            });
             0
         }
 
@@ -393,6 +498,8 @@ unsafe extern "system" fn wnd_proc(
                 };
                 // SAFETY: TrackMouseEvent request is passed a valid pointer to TRACKMOUSEEVENT.
                 unsafe { TrackMouseEvent(&mut tme) };
+                s.events.push(Event::MouseEnter);
+                #[allow(deprecated)]
                 s.events.push(Event::CursorEntered);
             }
             let (x, y) = mouse_xy!(lparam);
@@ -402,6 +509,8 @@ unsafe extern "system" fn wnd_proc(
         WM_MOUSELEAVE => {
             if let Ok(mut s) = state.lock() {
                 s.tracking_mouse = false;
+                s.events.push(Event::MouseLeave);
+                #[allow(deprecated)]
                 s.events.push(Event::CursorLeft);
             }
             0
@@ -470,6 +579,51 @@ unsafe extern "system" fn wnd_proc(
             0
         }
 
+        WM_DROPFILES => {
+            let hdrop = wparam as HANDLE;
+            // SAFETY: DragQueryFileW retrieves files dropped onto the window.
+            unsafe {
+                let count = DragQueryFileW(hdrop, 0xFFFFFFFF, std::ptr::null_mut(), 0);
+                for i in 0..count {
+                    let len = DragQueryFileW(hdrop, i, std::ptr::null_mut(), 0);
+                    if len > 0 {
+                        let mut buf = vec![0u16; len as usize + 1];
+                        DragQueryFileW(hdrop, i, buf.as_mut_ptr(), buf.len() as UINT);
+                        let path_str = String::from_utf16_lossy(&buf[..len as usize]);
+                        push!(Event::DroppedFile(PathBuf::from(path_str)));
+                    }
+                }
+                DragFinish(hdrop);
+            }
+            0
+        }
+
+        WM_DPICHANGED => {
+            let dpi = (wparam & 0xFFFF) as u32;
+            let scale = dpi as f64 / 96.0;
+            push!(Event::ScaleFactorChanged {
+                scale_factor: scale
+            });
+            // Update window position and size suggested by Windows in lParam RECT.
+            let rect_ptr = lparam as *const RECT;
+            if !rect_ptr.is_null() {
+                // SAFETY: rect_ptr is valid pointer to suggested window RECT.
+                unsafe {
+                    let r = &*rect_ptr;
+                    SetWindowPos(
+                        hwnd,
+                        HWND_TOP,
+                        r.left,
+                        r.top,
+                        r.right - r.left,
+                        r.bottom - r.top,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    );
+                }
+            }
+            0
+        }
+
         WM_SETFOCUS => {
             push!(Event::FocusGained);
             0
@@ -486,6 +640,12 @@ unsafe extern "system" fn wnd_proc(
 
 impl PlatformWindow {
     pub fn new(config: &WindowConfig) -> Result<Self> {
+        // Initialize DPI awareness if possible (Per-Monitor V2 awareness = -4).
+        // SAFETY: SetProcessDpiAwarenessContext is supported on Windows 10+.
+        unsafe {
+            let _ = SetProcessDpiAwarenessContext(-4);
+        }
+
         // SAFETY: Retrieving module handle for current process.
         let hinstance = unsafe { GetModuleHandleW(std::ptr::null()) };
         if hinstance == 0 {
@@ -522,11 +682,25 @@ impl PlatformWindow {
             }
         }
 
-        let style: DWORD = if config.resizable {
+        let mut style: DWORD = if !config.decorations {
+            WS_POPUP
+        } else if config.resizable {
             WS_OVERLAPPEDWINDOW
         } else {
             WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
         };
+
+        if config.visible {
+            style |= WS_VISIBLE;
+        }
+
+        let mut ex_style: DWORD = 0;
+        if config.always_on_top {
+            ex_style |= WS_EX_TOPMOST;
+        }
+        if config.transparent {
+            ex_style |= WS_EX_LAYERED;
+        }
 
         let mut rect = RECT {
             left: 0,
@@ -545,12 +719,15 @@ impl PlatformWindow {
         let state = Arc::new(Mutex::new(WindowState {
             events: Vec::new(),
             tracking_mouse: false,
+            is_minimized: false,
+            min_size: config.min_size,
+            max_size: config.max_size,
         }));
 
         // SAFETY: CreateWindowExW creates the top-level window.
         let hwnd = unsafe {
             CreateWindowExW(
-                0,
+                ex_style,
                 class_name.as_ptr(),
                 title.as_ptr(),
                 style,
@@ -571,8 +748,11 @@ impl PlatformWindow {
         // SAFETY: We attach the state Arc pointer to GWLP_USERDATA so wnd_proc can access it.
         unsafe {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Arc::as_ptr(&state) as LONG_PTR);
-            ShowWindow(hwnd, SW_SHOW);
-            UpdateWindow(hwnd);
+            DragAcceptFiles(hwnd, 1);
+            if config.visible {
+                ShowWindow(hwnd, SW_SHOW);
+                UpdateWindow(hwnd);
+            }
         }
 
         let initial_fullscreen = config.fullscreen;
@@ -677,6 +857,68 @@ impl PlatformWindow {
         }
     }
 
+    pub fn set_size(&self, width: u32, height: u32) {
+        self.width.store(width, Ordering::Relaxed);
+        self.height.store(height, Ordering::Relaxed);
+
+        // SAFETY: AdjustWindowRect and SetWindowPos resize window while preserving client area.
+        unsafe {
+            let style = GetWindowLongW(self.hwnd, GWL_STYLE) as DWORD;
+            let mut rect = RECT {
+                left: 0,
+                top: 0,
+                right: width as LONG,
+                bottom: height as LONG,
+            };
+            AdjustWindowRect(&mut rect, style, 0);
+            SetWindowPos(
+                self.hwnd,
+                HWND_TOP,
+                0,
+                0,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    pub fn set_position(&self, x: i32, y: i32) {
+        // SAFETY: SetWindowPos changes window screen position.
+        unsafe {
+            SetWindowPos(
+                self.hwnd,
+                HWND_TOP,
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    pub fn set_visible(&self, visible: bool) {
+        // SAFETY: ShowWindow toggles visibility.
+        unsafe {
+            ShowWindow(self.hwnd, if visible { SW_SHOW } else { SW_HIDE });
+        }
+    }
+
+    pub fn minimize(&self) {
+        // SAFETY: ShowWindow minimizes the window.
+        unsafe {
+            ShowWindow(self.hwnd, SW_MINIMIZE);
+        }
+    }
+
+    pub fn maximize(&self) {
+        // SAFETY: ShowWindow maximizes the window.
+        unsafe {
+            ShowWindow(self.hwnd, SW_MAXIMIZE);
+        }
+    }
+
     pub fn set_fullscreen(&self, is_fullscreen: bool) {
         let mut fs = self.fullscreen_state.lock().unwrap_or_else(|e| e.into_inner());
         if fs.fullscreen == is_fullscreen {
@@ -723,6 +965,10 @@ impl PlatformWindow {
         }
     }
 
+    pub fn set_cursor_grab(&self, grab: bool) {
+        self.set_mouse_grabbed(grab);
+    }
+
     pub fn set_mouse_grabbed(&self, grabbed: bool) {
         if self.mouse_grabbed.swap(grabbed, Ordering::SeqCst) == grabbed {
             return;
@@ -753,6 +999,18 @@ impl PlatformWindow {
             } else {
                 ReleaseCapture();
                 ClipCursor(std::ptr::null());
+            }
+        }
+    }
+
+    pub fn scale_factor(&self) -> f64 {
+        // SAFETY: GetDpiForWindow retrieves DPI for HWND, fallback to standard 96 DPI.
+        unsafe {
+            let dpi = GetDpiForWindow(self.hwnd);
+            if dpi > 0 {
+                dpi as f64 / 96.0
+            } else {
+                1.0
             }
         }
     }

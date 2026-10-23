@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::config::WindowConfig;
 use crate::error::{Error, Result};
-use crate::event::{ControlFlow, Event, Key, MouseButton};
+use crate::event::{ControlFlow, Event, Key, Modifiers, MouseButton};
 use crate::rwd::{
     AppKitDisplayHandle, AppKitWindowHandle, DisplayHandle, HandleError, HasDisplayHandle,
     HasWindowHandle, RawDisplayHandle, RawWindowHandle, WindowHandle,
@@ -691,11 +691,33 @@ impl PlatformWindow {
         match ty {
             NSEventTypeKeyDown => {
                 let code = unsafe { msg0_uint(event, sel!("keyCode")) } as u16;
-                Some(Event::KeyDown(keycode_to_key(code)))
+                let flags = unsafe { msg0_uint(event, sel!("modifierFlags")) };
+                let repeat = unsafe { msg0_bool(event, sel!("isARepeat")) } != 0;
+                let modifiers = Modifiers {
+                    shift: (flags & (1 << 17)) != 0,
+                    ctrl: (flags & (1 << 18)) != 0,
+                    alt: (flags & (1 << 19)) != 0,
+                    super_key: (flags & (1 << 20)) != 0,
+                };
+                Some(Event::KeyDown {
+                    key: keycode_to_key(code),
+                    repeat,
+                    modifiers,
+                })
             }
             NSEventTypeKeyUp => {
                 let code = unsafe { msg0_uint(event, sel!("keyCode")) } as u16;
-                Some(Event::KeyUp(keycode_to_key(code)))
+                let flags = unsafe { msg0_uint(event, sel!("modifierFlags")) };
+                let modifiers = Modifiers {
+                    shift: (flags & (1 << 17)) != 0,
+                    ctrl: (flags & (1 << 18)) != 0,
+                    alt: (flags & (1 << 19)) != 0,
+                    super_key: (flags & (1 << 20)) != 0,
+                };
+                Some(Event::KeyUp {
+                    key: keycode_to_key(code),
+                    modifiers,
+                })
             }
             NSEventTypeLeftMouseDown => {
                 let (x, y) = self.event_pos(event);
@@ -830,6 +852,57 @@ impl PlatformWindow {
                 CGDisplayHideCursor(display);
             }
         }
+    }
+
+    pub fn set_size(&self, width: u32, height: u32) {
+        unsafe {
+            let f: unsafe extern "C" fn(id, SEL, NSSize) = std::mem::transmute(objc_msgSend as usize);
+            f(
+                self.window,
+                sel!("setContentSize:"),
+                NSSize {
+                    width: width as CGFloat,
+                    height: height as CGFloat,
+                },
+            );
+        }
+    }
+
+    pub fn set_position(&self, x: i32, y: i32) {
+        unsafe {
+            msg_set_origin(
+                self.window,
+                sel!("setFrameOrigin:"),
+                NSPoint {
+                    x: x as CGFloat,
+                    y: y as CGFloat,
+                },
+            );
+        }
+    }
+
+    pub fn set_visible(&self, visible: bool) {
+        unsafe {
+            msg1_bool(self.window, sel!("setIsVisible:"), if visible { YES } else { NO });
+        }
+    }
+
+    pub fn minimize(&self) {
+        unsafe {
+            msg1(self.window, sel!("miniaturize:"), std::ptr::null_mut());
+        }
+    }
+
+    pub fn maximize(&self) {
+        unsafe {
+            msg1(self.window, sel!("zoom:"), std::ptr::null_mut());
+        }
+    }
+
+    pub fn set_cursor_grab(&self, _grab: bool) {}
+
+    pub fn scale_factor(&self) -> f64 {
+        unsafe { msg0_f64(self.window, sel!("backingScaleFactor")) }
     }
 
     pub fn inner_size(&self) -> (u32, u32) {

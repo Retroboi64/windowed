@@ -1,3 +1,5 @@
+//! Window configuration options.
+
 #[derive(Debug, Clone)]
 pub struct WindowConfig {
     pub title: String,
@@ -6,9 +8,12 @@ pub struct WindowConfig {
     pub position: Option<(i32, i32)>,
     pub resizable: bool,
     pub fullscreen: bool,
-
     pub min_size: Option<(u32, u32)>,
     pub max_size: Option<(u32, u32)>,
+    pub decorations: bool,
+    pub always_on_top: bool,
+    pub transparent: bool,
+    pub visible: bool,
 }
 
 impl WindowConfig {
@@ -22,6 +27,10 @@ impl WindowConfig {
             fullscreen: false,
             min_size: None,
             max_size: None,
+            decorations: true,
+            always_on_top: false,
+            transparent: false,
+            visible: true,
         }
     }
 
@@ -58,6 +67,26 @@ impl WindowConfig {
 
     pub fn max_size(mut self, width: u32, height: u32) -> Self {
         self.max_size = Some((width, height));
+        self
+    }
+
+    pub fn decorations(mut self, decorations: bool) -> Self {
+        self.decorations = decorations;
+        self
+    }
+
+    pub fn always_on_top(mut self, always_on_top: bool) -> Self {
+        self.always_on_top = always_on_top;
+        self
+    }
+
+    pub fn transparent(mut self, transparent: bool) -> Self {
+        self.transparent = transparent;
+        self
+    }
+
+    pub fn visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
         self
     }
 }

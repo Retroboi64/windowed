@@ -11,6 +11,7 @@ use crate::rwd::{
 };
 
 #[cfg(feature = "log")]
+#[allow(unused_imports)]
 use probably_fine_log::{error, info};
 
 // ── Platform GL back-ends ─────────────────────────────────────────────────────
@@ -208,6 +209,34 @@ impl Window {
 
     pub fn set_cursor_visible(&self, visible: bool) {
         self.inner.set_cursor_visible(visible);
+    }
+
+    pub fn set_size(&self, width: u32, height: u32) {
+        self.inner.set_size(width, height);
+    }
+
+    pub fn set_position(&self, x: i32, y: i32) {
+        self.inner.set_position(x, y);
+    }
+
+    pub fn set_visible(&self, visible: bool) {
+        self.inner.set_visible(visible);
+    }
+
+    pub fn minimize(&self) {
+        self.inner.minimize();
+    }
+
+    pub fn maximize(&self) {
+        self.inner.maximize();
+    }
+
+    pub fn set_cursor_grab(&self, grab: bool) {
+        self.inner.set_cursor_grab(grab);
+    }
+
+    pub fn scale_factor(&self) -> f64 {
+        self.inner.scale_factor()
     }
 
     pub fn inner_size(&self) -> (u32, u32) {

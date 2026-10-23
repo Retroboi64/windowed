@@ -10,15 +10,16 @@ use windowed::{ControlFlow, Event, Key, Window, WindowConfig};
 
 fn main() -> windowed::Result<()> {
     let config = WindowConfig::new("A simple window")
-        .fullscreen(true)
+        .size(800, 600)
         .resizable(true);
 
     let mut window = Window::new(config)?;
 
-    // _window is a refrance to the window
     window.run(|event, _window| match event {
         Event::CloseRequested => ControlFlow::Exit,
-        Event::KeyDown(Key::Escape) => ControlFlow::Exit,
+        Event::KeyDown {
+            key: Key::Escape, ..
+        } => ControlFlow::Exit,
         _ => ControlFlow::Continue,
     })
 }
