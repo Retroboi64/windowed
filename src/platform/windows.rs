@@ -1,4 +1,4 @@
-﻿//! Windows Win32 platform backend.
+//! Windows Win32 platform backend.
 #![allow(
     non_camel_case_types,
     non_snake_case,
@@ -490,7 +490,8 @@ unsafe extern "system" fn wnd_proc(
         WM_CHAR => {
             let cp = wparam as u32;
             if cp >= 0x20
-                && let Some(ch) = char::from_u32(cp) {
+                && let Some(ch) = char::from_u32(cp)
+            {
                 push!(Event::CharInput(ch));
             }
             0
@@ -498,7 +499,8 @@ unsafe extern "system" fn wnd_proc(
 
         WM_MOUSEMOVE => {
             if let Ok(mut s) = state.lock()
-                && !s.tracking_mouse {
+                && !s.tracking_mouse
+            {
                 s.tracking_mouse = true;
                 let mut tme = TRACKMOUSEEVENT {
                     cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as DWORD,
@@ -721,9 +723,7 @@ impl PlatformWindow {
         // SAFETY: AdjustWindowRect calculates window bounds required for desired client size.
         unsafe { AdjustWindowRect(&mut rect, style, 0) };
 
-        let (cx, cy) = config
-            .position
-            .unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
+        let (cx, cy) = config.position.unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
 
         let title = to_wide(&config.title);
         let state = Arc::new(Mutex::new(WindowState {
@@ -949,7 +949,10 @@ impl PlatformWindow {
     }
 
     pub fn set_fullscreen(&self, is_fullscreen: bool) {
-        let mut fs = self.fullscreen_state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut fs = self
+            .fullscreen_state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if fs.fullscreen == is_fullscreen {
             return;
         }
@@ -1094,11 +1097,7 @@ impl PlatformWindow {
         // SAFETY: GetDpiForWindow retrieves DPI for HWND, fallback to standard 96 DPI.
         unsafe {
             let dpi = GetDpiForWindow(self.hwnd);
-            if dpi > 0 {
-                dpi as f64 / 96.0
-            } else {
-                1.0
-            }
+            if dpi > 0 { dpi as f64 / 96.0 } else { 1.0 }
         }
     }
 
@@ -1237,35 +1236,54 @@ fn vk_to_key(vk: u16) -> Key {
 
 #[cfg(feature = "raw-window-handle")]
 impl PlatformWindow {
-    pub fn window_handle_rwh(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+    pub fn window_handle_rwh(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError>
+    {
         use std::num::NonZeroIsize;
-        let hwnd_val = NonZeroIsize::new(self.hwnd).ok_or(::raw_window_handle::HandleError::Unavailable)?;
+        let hwnd_val =
+            NonZeroIsize::new(self.hwnd).ok_or(::raw_window_handle::HandleError::Unavailable)?;
         let mut h = ::raw_window_handle::Win32WindowHandle::new(hwnd_val);
         h.hinstance = NonZeroIsize::new(self.hinstance);
         // SAFETY: HWND and HINSTANCE remain valid for lifetime of self.
-        Ok(unsafe { ::raw_window_handle::WindowHandle::borrow_raw(::raw_window_handle::RawWindowHandle::Win32(h)) })
+        Ok(unsafe {
+            ::raw_window_handle::WindowHandle::borrow_raw(
+                ::raw_window_handle::RawWindowHandle::Win32(h),
+            )
+        })
     }
 
-    pub fn display_handle_rwh(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
+    pub fn display_handle_rwh(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError>
+    {
         // SAFETY: Windows display handle is a unit struct with no state.
         Ok(unsafe {
-            ::raw_window_handle::DisplayHandle::borrow_raw(::raw_window_handle::RawDisplayHandle::Windows(
-                ::raw_window_handle::WindowsDisplayHandle::new(),
-            ))
+            ::raw_window_handle::DisplayHandle::borrow_raw(
+                ::raw_window_handle::RawDisplayHandle::Windows(
+                    ::raw_window_handle::WindowsDisplayHandle::new(),
+                ),
+            )
         })
     }
 }
 
 #[cfg(feature = "raw-window-handle")]
 impl ::raw_window_handle::HasWindowHandle for PlatformWindow {
-    fn window_handle(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+    fn window_handle(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError>
+    {
         self.window_handle_rwh()
     }
 }
 
 #[cfg(feature = "raw-window-handle")]
 impl ::raw_window_handle::HasDisplayHandle for PlatformWindow {
-    fn display_handle(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
+    fn display_handle(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError>
+    {
         self.display_handle_rwh()
     }
 }

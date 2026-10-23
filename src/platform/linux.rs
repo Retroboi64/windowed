@@ -1,4 +1,4 @@
-﻿//! Linux / X11 platform backend.
+//! Linux / X11 platform backend.
 #![allow(
     non_camel_case_types,
     non_snake_case,
@@ -409,7 +409,12 @@ unsafe extern "C" {
         time: c_ulong,
     ) -> c_int;
     fn XUngrabPointer(display: *mut XDisplay, time: c_ulong) -> c_int;
-    fn XSetSelectionOwner(display: *mut XDisplay, selection: Atom, owner: XWindow, time: c_ulong) -> c_int;
+    fn XSetSelectionOwner(
+        display: *mut XDisplay,
+        selection: Atom,
+        owner: XWindow,
+        time: c_ulong,
+    ) -> c_int;
     fn XSendEvent(
         display: *mut XDisplay,
         w: XWindow,
@@ -1011,31 +1016,52 @@ fn x11_keycode_to_key(code: u8) -> Key {
 
 #[cfg(feature = "raw-window-handle")]
 impl PlatformWindow {
-    pub fn window_handle_rwh(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+    pub fn window_handle_rwh(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError>
+    {
         let mut h = ::raw_window_handle::XlibWindowHandle::new(self.window);
         h.visual_id = 0;
         // SAFETY: XID remains valid for lifetime of self.
-        Ok(unsafe { ::raw_window_handle::WindowHandle::borrow_raw(::raw_window_handle::RawWindowHandle::Xlib(h)) })
+        Ok(unsafe {
+            ::raw_window_handle::WindowHandle::borrow_raw(
+                ::raw_window_handle::RawWindowHandle::Xlib(h),
+            )
+        })
     }
 
-    pub fn display_handle_rwh(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
-        let ptr = NonNull::new(self.display).ok_or(::raw_window_handle::HandleError::Unavailable)?;
+    pub fn display_handle_rwh(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError>
+    {
+        let ptr =
+            NonNull::new(self.display).ok_or(::raw_window_handle::HandleError::Unavailable)?;
         let h = ::raw_window_handle::XlibDisplayHandle::new(Some(ptr), self.screen);
         // SAFETY: Display connection remains valid for lifetime of self.
-        Ok(unsafe { ::raw_window_handle::DisplayHandle::borrow_raw(::raw_window_handle::RawDisplayHandle::Xlib(h)) })
+        Ok(unsafe {
+            ::raw_window_handle::DisplayHandle::borrow_raw(
+                ::raw_window_handle::RawDisplayHandle::Xlib(h),
+            )
+        })
     }
 }
 
 #[cfg(feature = "raw-window-handle")]
 impl ::raw_window_handle::HasWindowHandle for PlatformWindow {
-    fn window_handle(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+    fn window_handle(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError>
+    {
         self.window_handle_rwh()
     }
 }
 
 #[cfg(feature = "raw-window-handle")]
 impl ::raw_window_handle::HasDisplayHandle for PlatformWindow {
-    fn display_handle(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
+    fn display_handle(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError>
+    {
         self.display_handle_rwh()
     }
 }

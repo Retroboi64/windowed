@@ -1,4 +1,6 @@
-﻿use crate::config::WindowConfig;
+//! Window creation, event loop running, and runtime controls.
+
+use crate::config::WindowConfig;
 use crate::error::Result;
 use crate::event::{ControlFlow, Event};
 use crate::platform::PlatformWindow;
@@ -17,6 +19,8 @@ use probably_fine_log::{error, info};
 // ── Platform GL back-ends ─────────────────────────────────────────────────────
 /// Win32 / WGL helpers (Windows only).
 #[cfg(target_os = "windows")]
+#[doc(hidden)]
+#[allow(missing_docs)]
 pub mod win_gl {
     use std::ffi::c_void;
 
@@ -106,6 +110,8 @@ pub mod win_gl {
 
 /// GLX helpers (Linux / X11 only).
 #[cfg(target_os = "linux")]
+#[doc(hidden)]
+#[allow(missing_docs)]
 pub mod glx {
     use std::ffi::c_void;
 
@@ -136,6 +142,8 @@ pub mod glx {
 
 /// NSOpenGLContext helpers (macOS only).
 #[cfg(target_os = "macos")]
+#[doc(hidden)]
+#[allow(missing_docs)]
 pub mod cgl {
     use std::ffi::{c_char, c_void};
 
@@ -170,17 +178,61 @@ pub mod cgl {
 }
 
 // ── Window ────────────────────────────────────────────────────────────────────
+/// A cross-platform window handle.
+///
+/// Wraps native Win32 `HWND`, Linux X11 `Window`, or macOS `NSWindow` / `NSView`.
+///
+/// # Examples
+///
+/// ```no_run
+/// use windowed::{ControlFlow, Event, Window, WindowConfig};
+///
+/// fn main() -> windowed::Result<()> {
+///     let mut window = Window::new(WindowConfig::new("My App").size(800, 600))?;
+///     window.run(|event, _win| match event {
+///         Event::CloseRequested => ControlFlow::Exit,
+///         _ => ControlFlow::Poll,
+///     })
+/// }
+/// ```
 pub struct Window {
     inner: PlatformWindow,
 }
 
 impl Window {
+    /// Creates a new native window using the given configuration.
+    ///
+    /// # Errors
+    /// Returns [`Error::Platform`](crate::Error::Platform) if window creation fails on the OS,
+    /// or [`Error::NoDisplay`](crate::Error::NoDisplay) if no display server is available.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Title").size(1024, 768)).unwrap();
+    /// ```
     pub fn new(config: WindowConfig) -> Result<Self> {
         Ok(Self {
             inner: PlatformWindow::new(&config)?,
         })
     }
 
+    /// Runs the platform event loop, invoking `callback` for each event until
+    /// [`ControlFlow::Exit`] is returned or the window is closed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{ControlFlow, Event, Window, WindowConfig};
+    ///
+    /// let mut window = Window::new(WindowConfig::new("App")).unwrap();
+    /// window.run(|event, _win| match event {
+    ///     Event::CloseRequested => ControlFlow::Exit,
+    ///     _ => ControlFlow::Wait,
+    /// }).unwrap();
+    /// ```
     pub fn run<F: FnMut(Event, &Self) -> ControlFlow>(&mut self, mut callback: F) -> Result<()> {
         let self_ptr = self as *const Self;
         self.inner.run(|event| {
@@ -193,8 +245,25 @@ impl Window {
 
     /// Process all currently pending events from the OS event queue without blocking.
     ///
-    /// Returns ControlFlow::Exit if a close/quit request occurred or the callback
-    /// requested exit, otherwise returns the most recent ControlFlow (e.g. ControlFlow::Poll or ControlFlow::Wait).
+    /// Returns [`ControlFlow::Exit`] if a close/quit request occurred or the callback
+    /// requested exit, otherwise returns the most recent [`ControlFlow`].
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{ControlFlow, Event, Window, WindowConfig};
+    ///
+    /// let mut window = Window::new(WindowConfig::new("Game")).unwrap();
+    /// loop {
+    ///     let flow = window.pump_events(|event, _win| match event {
+    ///         Event::CloseRequested => ControlFlow::Exit,
+    ///         _ => ControlFlow::Poll,
+    ///     }).unwrap();
+    ///     if matches!(flow, ControlFlow::Exit) {
+    ///         break;
+    ///     }
+    /// }
+    /// ```
     pub fn pump_events<F: FnMut(Event, &Self) -> ControlFlow>(
         &mut self,
         mut callback: F,
@@ -208,64 +277,225 @@ impl Window {
         })
     }
 
+    /// Requests an explicit repaint of the window.
+    ///
+    /// Causes [`Event::RedrawRequested`] to be emitted on the next event loop cycle.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Repaint")).unwrap();
+    /// window.request_redraw();
+    /// ```
     pub fn request_redraw(&self) {
         self.inner.request_redraw();
     }
 
+    /// Dynamically updates the window title in the titlebar and taskbar.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Initial")).unwrap();
+    /// window.set_title("Updated Title");
+    /// ```
     pub fn set_title(&self, title: &str) {
         self.inner.set_title(title);
     }
 
+    /// Sets or removes borderless fullscreen mode.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Fullscreen Demo")).unwrap();
+    /// window.set_fullscreen(true);
+    /// ```
     pub fn set_fullscreen(&self, is_fullscreen: bool) {
         self.inner.set_fullscreen(is_fullscreen);
     }
 
+    /// Warps the cursor to the given window client coordinates `(x, y)`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Cursor Warp")).unwrap();
+    /// window.warp_mouse(100, 100);
+    /// ```
     pub fn warp_mouse(&self, x: i32, y: i32) {
         self.inner.warp_mouse(x, y);
     }
 
+    /// Shows or hides the mouse cursor when hovering over this window.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Hidden Cursor")).unwrap();
+    /// window.set_cursor_visible(false);
+    /// ```
     pub fn set_cursor_visible(&self, visible: bool) {
         self.inner.set_cursor_visible(visible);
     }
 
+    /// Resizes the window client area to `(width, height)` in physical pixels.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Resize Demo")).unwrap();
+    /// window.set_size(1280, 720);
+    /// ```
     pub fn set_size(&self, width: u32, height: u32) {
         self.inner.set_size(width, height);
     }
 
+    /// Sets the position of the window top-left corner on the screen in pixels.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Move Demo")).unwrap();
+    /// window.set_position(100, 100);
+    /// ```
     pub fn set_position(&self, x: i32, y: i32) {
         self.inner.set_position(x, y);
     }
 
+    /// Shows or hides the window.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Visibility")).unwrap();
+    /// window.set_visible(false);
+    /// ```
     pub fn set_visible(&self, visible: bool) {
         self.inner.set_visible(visible);
     }
 
+    /// Minimizes the window to the taskbar/dock.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Minimize Demo")).unwrap();
+    /// window.minimize();
+    /// ```
     pub fn minimize(&self) {
         self.inner.minimize();
     }
 
+    /// Maximizes the window to fill the work area.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Maximize Demo")).unwrap();
+    /// window.maximize();
+    /// ```
     pub fn maximize(&self) {
         self.inner.maximize();
     }
 
+    /// Confines (or releases) the mouse cursor within the window client area.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("FPS Camera")).unwrap();
+    /// window.set_cursor_grab(true);
+    /// ```
     pub fn set_cursor_grab(&self, grab: bool) {
         self.inner.set_cursor_grab(grab);
     }
 
+    /// Returns the current HiDPI display scale factor (e.g. `1.0` or `2.0`).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("HiDPI Demo")).unwrap();
+    /// let scale = window.scale_factor();
+    /// println!("Scale factor: {scale}");
+    /// ```
     pub fn scale_factor(&self) -> f64 {
         self.inner.scale_factor()
     }
 
     /// Sets the system clipboard text content.
+    ///
+    /// # Errors
+    /// Returns [`Error::Platform`](crate::Error::Platform) if writing to the clipboard fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Clipboard Demo")).unwrap();
+    /// window.set_clipboard_text("Hello clipboard!").unwrap();
+    /// ```
     pub fn set_clipboard_text(&self, text: &str) -> Result<()> {
         self.inner.set_clipboard_text(text)
     }
 
-    /// Gets the system clipboard text content.
+    /// Retrieves the current system clipboard text content.
+    ///
+    /// # Errors
+    /// Returns [`Error::Platform`](crate::Error::Platform) if reading from the clipboard fails
+    /// or if the clipboard does not contain valid text.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Clipboard Demo")).unwrap();
+    /// if let Ok(text) = window.get_clipboard_text() {
+    ///     println!("Clipboard contains: {text}");
+    /// }
+    /// ```
     pub fn get_clipboard_text(&self) -> Result<String> {
         self.inner.get_clipboard_text()
     }
 
+    /// Returns the width and height of the window client area in physical pixels.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("Size Demo").size(800, 600)).unwrap();
+    /// let (w, h) = window.inner_size();
+    /// assert_eq!((w, h), (800, 600));
+    /// ```
     pub fn inner_size(&self) -> (u32, u32) {
         self.inner.inner_size()
     }
@@ -331,6 +561,16 @@ impl Window {
         }
     }
 
+    /// Resolves an OpenGL function pointer by name (e.g. `"glGetString"`).
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("GL Demo")).unwrap();
+    /// let ptr = window.get_proc_address("glGetString");
+    /// ```
     pub fn get_proc_address(&self, name: &str) -> *const c_void {
         let Ok(cname) = CString::new(name) else {
             return std::ptr::null();
@@ -349,6 +589,16 @@ impl Window {
         return unsafe { cgl::get_proc_address(cname.as_ptr()) };
     }
 
+    /// Diagnostically logs the active OpenGL context and version string.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use windowed::{Window, WindowConfig};
+    ///
+    /// let window = Window::new(WindowConfig::new("GL Test")).unwrap();
+    /// window.test_gl();
+    /// ```
     pub fn test_gl(&self) {
         #[cfg(target_os = "linux")]
         {
@@ -442,6 +692,7 @@ impl Window {
         assert!(ok != 0, "glXMakeCurrent failed");
     }
 
+    /// Returns the X11 `Display` and `Window` XID (Linux only).
     #[cfg(target_os = "linux")]
     pub fn linux_display_xid(&self) -> (*mut c_void, u64) {
         let raw_display = self
@@ -573,7 +824,8 @@ impl Window {
         }
 
         let msg0 = |recv: id, sel: SEL| -> id {
-            let f: unsafe extern "C" fn(id, SEL) -> id = unsafe { std::mem::transmute(objc_msgSend as usize) };
+            let f: unsafe extern "C" fn(id, SEL) -> id =
+                unsafe { std::mem::transmute(objc_msgSend as usize) };
             unsafe { f(recv, sel) }
         };
         let msg1 = |recv: id, sel: SEL, a: id| -> id {
@@ -582,7 +834,8 @@ impl Window {
             unsafe { f(recv, sel, a) }
         };
         let msg1_bool = |recv: id, sel: SEL, a: BOOL| {
-            let f: unsafe extern "C" fn(id, SEL, BOOL) = unsafe { std::mem::transmute(objc_msgSend as usize) };
+            let f: unsafe extern "C" fn(id, SEL, BOOL) =
+                unsafe { std::mem::transmute(objc_msgSend as usize) };
             unsafe { f(recv, sel, a) }
         };
         let msg_init_pf = |recv: id, sel: SEL, attrs: id| -> id {
@@ -641,7 +894,9 @@ impl Window {
         );
         msg0(ctx, sel!("makeCurrentContext"));
 
-        self.inner.gl_ctx.store(ctx, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .gl_ctx
+            .store(ctx, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -660,14 +915,20 @@ impl HasDisplayHandle for Window {
 
 #[cfg(feature = "raw-window-handle")]
 impl ::raw_window_handle::HasWindowHandle for Window {
-    fn window_handle(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+    fn window_handle(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError>
+    {
         self.inner.window_handle_rwh()
     }
 }
 
 #[cfg(feature = "raw-window-handle")]
 impl ::raw_window_handle::HasDisplayHandle for Window {
-    fn display_handle(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
+    fn display_handle(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError>
+    {
         self.inner.display_handle_rwh()
     }
 }

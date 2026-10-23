@@ -1,0 +1,2 @@
+# Clippy configuration for windowed
+msrv = "1.85.0"

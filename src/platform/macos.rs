@@ -1,4 +1,4 @@
-﻿//! macOS Cocoa/AppKit platform backend.
+//! macOS Cocoa/AppKit platform backend.
 //!
 //! Uses the Objective-C runtime and AppKit/CoreGraphics frameworks directly
 //! (zero external Rust dependencies).
@@ -364,49 +364,53 @@ unsafe impl Sync for SendSyncClass {}
 static DELEGATE_CLASS: OnceLock<SendSyncClass> = OnceLock::new();
 
 fn get_delegate_class() -> Class {
-    DELEGATE_CLASS.get_or_init(|| SendSyncClass(unsafe {
-        let cls = objc_allocateClassPair(
-            cls!("NSObject"),
-            b"WindowerDelegate\0".as_ptr() as *const c_char,
-            0,
-        );
-        assert!(
-            !cls.is_null(),
-            "objc_allocateClassPair failed for WindowerDelegate"
-        );
+    DELEGATE_CLASS
+        .get_or_init(|| {
+            SendSyncClass(unsafe {
+                let cls = objc_allocateClassPair(
+                    cls!("NSObject"),
+                    b"WindowerDelegate\0".as_ptr() as *const c_char,
+                    0,
+                );
+                assert!(
+                    !cls.is_null(),
+                    "objc_allocateClassPair failed for WindowerDelegate"
+                );
 
-        class_addIvar(
-            cls,
-            IVAR_STATE.as_ptr() as *const c_char,
-            std::mem::size_of::<usize>(),
-            std::mem::align_of::<usize>() as u8,
-            b"^v\0".as_ptr() as *const c_char,
-        );
+                class_addIvar(
+                    cls,
+                    IVAR_STATE.as_ptr() as *const c_char,
+                    std::mem::size_of::<usize>(),
+                    std::mem::align_of::<usize>() as u8,
+                    b"^v\0".as_ptr() as *const c_char,
+                );
 
-        class_addMethod(
-            cls,
-            sel!("windowShouldClose:"),
-            delegate_window_should_close as usize as *mut c_void,
-            b"c@:@\0".as_ptr() as *const c_char,
-        );
+                class_addMethod(
+                    cls,
+                    sel!("windowShouldClose:"),
+                    delegate_window_should_close as usize as *mut c_void,
+                    b"c@:@\0".as_ptr() as *const c_char,
+                );
 
-        class_addMethod(
-            cls,
-            sel!("windowDidBecomeKey:"),
-            delegate_window_did_become_key as usize as *mut c_void,
-            b"v@:@\0".as_ptr() as *const c_char,
-        );
+                class_addMethod(
+                    cls,
+                    sel!("windowDidBecomeKey:"),
+                    delegate_window_did_become_key as usize as *mut c_void,
+                    b"v@:@\0".as_ptr() as *const c_char,
+                );
 
-        class_addMethod(
-            cls,
-            sel!("windowDidResignKey:"),
-            delegate_window_did_resign_key as usize as *mut c_void,
-            b"v@:@\0".as_ptr() as *const c_char,
-        );
+                class_addMethod(
+                    cls,
+                    sel!("windowDidResignKey:"),
+                    delegate_window_did_resign_key as usize as *mut c_void,
+                    b"v@:@\0".as_ptr() as *const c_char,
+                );
 
-        objc_registerClassPair(cls);
-        cls
-    })).0
+                objc_registerClassPair(cls);
+                cls
+            })
+        })
+        .0
 }
 
 // ─── View subclass ────────────────────────────────────────────────────────────
@@ -423,34 +427,38 @@ unsafe extern "C" fn view_key_down(_this: id, _cmd: SEL, _event: id) { /* swallo
 static VIEW_CLASS: OnceLock<SendSyncClass> = OnceLock::new();
 
 fn get_view_class() -> Class {
-    VIEW_CLASS.get_or_init(|| SendSyncClass(unsafe {
-        let cls = objc_allocateClassPair(
-            cls!("NSView"),
-            b"WindowerView\0".as_ptr() as *const c_char,
-            0,
-        );
-        assert!(
-            !cls.is_null(),
-            "objc_allocateClassPair failed for WindowerView"
-        );
+    VIEW_CLASS
+        .get_or_init(|| {
+            SendSyncClass(unsafe {
+                let cls = objc_allocateClassPair(
+                    cls!("NSView"),
+                    b"WindowerView\0".as_ptr() as *const c_char,
+                    0,
+                );
+                assert!(
+                    !cls.is_null(),
+                    "objc_allocateClassPair failed for WindowerView"
+                );
 
-        class_addMethod(
-            cls,
-            sel!("acceptsFirstResponder"),
-            view_accepts_first_responder as usize as *mut c_void,
-            b"c@:\0".as_ptr() as *const c_char,
-        );
+                class_addMethod(
+                    cls,
+                    sel!("acceptsFirstResponder"),
+                    view_accepts_first_responder as usize as *mut c_void,
+                    b"c@:\0".as_ptr() as *const c_char,
+                );
 
-        class_addMethod(
-            cls,
-            sel!("keyDown:"),
-            view_key_down as usize as *mut c_void,
-            b"v@:@\0".as_ptr() as *const c_char,
-        );
+                class_addMethod(
+                    cls,
+                    sel!("keyDown:"),
+                    view_key_down as usize as *mut c_void,
+                    b"v@:@\0".as_ptr() as *const c_char,
+                );
 
-        objc_registerClassPair(cls);
-        cls
-    })).0
+                objc_registerClassPair(cls);
+                cls
+            })
+        })
+        .0
 }
 
 // ─── PlatformWindow ───────────────────────────────────────────────────────────
@@ -898,7 +906,8 @@ impl PlatformWindow {
 
     pub fn set_size(&self, width: u32, height: u32) {
         unsafe {
-            let f: unsafe extern "C" fn(id, SEL, NSSize) = std::mem::transmute(objc_msgSend as usize);
+            let f: unsafe extern "C" fn(id, SEL, NSSize) =
+                std::mem::transmute(objc_msgSend as usize);
             f(
                 self.window,
                 sel!("setContentSize:"),
@@ -925,7 +934,11 @@ impl PlatformWindow {
 
     pub fn set_visible(&self, visible: bool) {
         unsafe {
-            msg1_bool(self.window, sel!("setIsVisible:"), if visible { YES } else { NO });
+            msg1_bool(
+                self.window,
+                sel!("setIsVisible:"),
+                if visible { YES } else { NO },
+            );
         }
     }
 
@@ -950,7 +963,8 @@ impl PlatformWindow {
             msg0(pboard, sel!("clearContents"));
             let str_type = nsstring("public.utf8-plain-text");
             let str_obj = nsstring(text);
-            let f: unsafe extern "C" fn(id, SEL, id, id) -> BOOL = std::mem::transmute(objc_msgSend as usize);
+            let f: unsafe extern "C" fn(id, SEL, id, id) -> BOOL =
+                std::mem::transmute(objc_msgSend as usize);
             f(pboard, sel!("setString:forType:"), str_obj, str_type);
             pool_pop(pool);
         }
@@ -962,7 +976,8 @@ impl PlatformWindow {
         let s = unsafe {
             let pboard = msg0(cls!("NSPasteboard"), sel!("generalPasteboard"));
             let str_type = nsstring("public.utf8-plain-text");
-            let f: unsafe extern "C" fn(id, SEL, id) -> id = std::mem::transmute(objc_msgSend as usize);
+            let f: unsafe extern "C" fn(id, SEL, id) -> id =
+                std::mem::transmute(objc_msgSend as usize);
             let str_obj = f(pboard, sel!("stringForType:"), str_type);
             if str_obj.is_null() {
                 pool_pop(pool);
@@ -970,7 +985,9 @@ impl PlatformWindow {
             }
             let utf8_ptr = msg0(str_obj, sel!("UTF8String")) as *const c_char;
             let res = if !utf8_ptr.is_null() {
-                std::ffi::CStr::from_ptr(utf8_ptr).to_string_lossy().into_owned()
+                std::ffi::CStr::from_ptr(utf8_ptr)
+                    .to_string_lossy()
+                    .into_owned()
             } else {
                 String::new()
             };
@@ -1108,33 +1125,51 @@ fn keycode_to_key(code: u16) -> Key {
 
 #[cfg(feature = "raw-window-handle")]
 impl PlatformWindow {
-    pub fn window_handle_rwh(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+    pub fn window_handle_rwh(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError>
+    {
         let ptr = NonNull::new(self.view).ok_or(::raw_window_handle::HandleError::Unavailable)?;
         let h = ::raw_window_handle::AppKitWindowHandle::new(ptr);
         // SAFETY: NSView pointer remains valid for lifetime of self.
-        Ok(unsafe { ::raw_window_handle::WindowHandle::borrow_raw(::raw_window_handle::RawWindowHandle::AppKit(h)) })
+        Ok(unsafe {
+            ::raw_window_handle::WindowHandle::borrow_raw(
+                ::raw_window_handle::RawWindowHandle::AppKit(h),
+            )
+        })
     }
 
-    pub fn display_handle_rwh(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
+    pub fn display_handle_rwh(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError>
+    {
         // SAFETY: AppKit display handle is a unit struct with no state.
         Ok(unsafe {
-            ::raw_window_handle::DisplayHandle::borrow_raw(::raw_window_handle::RawDisplayHandle::AppKit(
-                ::raw_window_handle::AppKitDisplayHandle::new(),
-            ))
+            ::raw_window_handle::DisplayHandle::borrow_raw(
+                ::raw_window_handle::RawDisplayHandle::AppKit(
+                    ::raw_window_handle::AppKitDisplayHandle::new(),
+                ),
+            )
         })
     }
 }
 
 #[cfg(feature = "raw-window-handle")]
 impl ::raw_window_handle::HasWindowHandle for PlatformWindow {
-    fn window_handle(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+    fn window_handle(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError>
+    {
         self.window_handle_rwh()
     }
 }
 
 #[cfg(feature = "raw-window-handle")]
 impl ::raw_window_handle::HasDisplayHandle for PlatformWindow {
-    fn display_handle(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
+    fn display_handle(
+        &self,
+    ) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError>
+    {
         self.display_handle_rwh()
     }
 }

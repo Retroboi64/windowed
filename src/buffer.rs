@@ -1,12 +1,13 @@
-﻿//! Low-level buffer-swap helpers for OpenGL.
+//! Low-level buffer-swap helpers for OpenGL.
 //!
-//! These are `pub(crate)` building blocks consumed by [`crate::window::Window::swap_buffers`].
+//! These are `pub(crate)` or `pub` building blocks consumed by [`crate::window::Window::swap_buffers`].
 //! Most users should call that method rather than using this module directly.
 
 // ── Linux / X11 ──────────────────────────────────────────────────────────────
 #[cfg(all(feature = "opengl", target_os = "linux"))]
 #[link(name = "GL")]
 unsafe extern "C" {
+    /// Exchanges the front and back buffers on the specified display and drawable.
     pub fn glXSwapBuffers(display: *mut std::ffi::c_void, drawable: u64);
 }
 
@@ -14,12 +15,16 @@ unsafe extern "C" {
 #[cfg(all(feature = "opengl", target_os = "windows"))]
 #[link(name = "gdi32")]
 unsafe extern "system" {
+    /// Exchanges the front and back buffers of the current device context.
     pub fn SwapBuffers(hdc: *mut std::ffi::c_void) -> i32;
+    /// Retrieves a device context handle for the specified window handle.
     pub fn GetDC(hwnd: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
 }
 
 // ── macOS ─────────────────────────────────────────────────────────────────────
 
+/// Flushes the specified Cocoa OpenGL context surface.
+///
 /// # Safety
 /// `ctx` must be a valid, retained `NSOpenGLContext*`.
 #[cfg(target_os = "macos")]

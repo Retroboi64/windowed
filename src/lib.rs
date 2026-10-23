@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! **windowed** — a minimal, zero-dependency, cross-platform windowing library.
 //!
 //! Supports:
