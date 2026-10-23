@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-22
+
 ### Breaking Changes
 - **`Event::KeyDown` and `Event::KeyUp` structure:**
   - Changed `Event::KeyDown(Key)` to `Event::KeyDown { key: Key, repeat: bool, modifiers: Modifiers }`.
@@ -66,3 +68,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed derive attributes and struct layout issues on Win32 `POINT` / `RECT` / `WINDOWPLACEMENT`.
 - Replaced mouse warp client-space math with proper `ClientToScreen` conversion.
 - Replaced unhandled panics and unwraps with structured `Result` error returns.
+
+[Unreleased]: https://github.com/Retroboi64/windowed/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Retroboi64/windowed/compare/v0.3.1...v0.4.0

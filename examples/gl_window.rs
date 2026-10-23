@@ -16,6 +16,13 @@ use gl::{FRAGMENT_SHADER, VERTEX_SHADER};
 #[cfg(feature = "log")]
 use probably_fine_log::{Level, StderrLogger, info, set_logger, set_max_level};
 
+#[cfg(not(feature = "log"))]
+macro_rules! info {
+    ($($arg:tt)*) => {
+        println!($($arg)*);
+    };
+}
+
 use windowed::{ControlFlow, Event, Key, Window, WindowConfig};
 
 const VERTEX_SHADER_SRC: &[u8] = b"
