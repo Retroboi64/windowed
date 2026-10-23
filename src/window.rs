@@ -702,7 +702,7 @@ impl Window {
 
         let display = match raw_display {
             RawDisplayHandle::Xlib(h) => match h.display {
-                Some(ptr) => ptr.as_ptr() as *mut c_void,
+                Some(ptr) => ptr.as_ptr(),
                 None => {
                     #[cfg(feature = "log")]
                     error!(
@@ -795,11 +795,15 @@ impl Window {
     }
 
     #[cfg(target_os = "macos")]
-    #[allow(function_casts_as_integer, unused_unsafe)]
+    #[allow(
+        function_casts_as_integer,
+        unused_unsafe,
+        non_camel_case_types,
+        clippy::upper_case_acronyms
+    )]
     unsafe fn create_gl_context_macos(&self) {
         use std::ffi::c_void;
 
-        #[allow(non_camel_case_types)]
         type id = *mut c_void;
         type SEL = *mut c_void;
         type BOOL = i8;

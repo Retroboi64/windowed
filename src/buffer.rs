@@ -40,7 +40,7 @@ pub unsafe fn macos_flush_buffer(ctx: *mut std::ffi::c_void) {
         ) -> *mut std::ffi::c_void;
     }
     // SAFETY: Registering selector and sending flushBuffer message to context.
-    let sel = unsafe { sel_registerName(b"flushBuffer\0".as_ptr() as *const c_char) };
+    let sel = unsafe { sel_registerName(c"flushBuffer".as_ptr()) };
     let f: unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) =
         unsafe { std::mem::transmute(objc_msgSend as *const () as usize) };
     unsafe { f(ctx, sel) };
@@ -66,8 +66,7 @@ pub unsafe fn macos_get_proc_address(name: *const std::ffi::c_char) -> *const st
         // SAFETY: dlopen system OpenGL framework on macOS.
         let ptr = unsafe {
             dlopen(
-                b"/System/Library/Frameworks/OpenGL.framework/OpenGL\0".as_ptr()
-                    as *const std::ffi::c_char,
+                c"/System/Library/Frameworks/OpenGL.framework/OpenGL".as_ptr(),
                 1,
             )
         };

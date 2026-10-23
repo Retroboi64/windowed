@@ -317,11 +317,11 @@ struct PlatformState {
     events: Vec<Event>,
 }
 
-const IVAR_STATE: &[u8] = b"_state\0";
+const IVAR_STATE: &std::ffi::CStr = c"_state";
 
 unsafe fn delegate_get_state(this: id) -> Option<Arc<Mutex<PlatformState>>> {
     let mut ptr: *mut c_void = std::ptr::null_mut();
-    object_getInstanceVariable(this, IVAR_STATE.as_ptr() as *const c_char, &mut ptr);
+    object_getInstanceVariable(this, IVAR_STATE.as_ptr(), &mut ptr);
     if ptr.is_null() {
         return None;
     }
@@ -367,11 +367,7 @@ fn get_delegate_class() -> Class {
     DELEGATE_CLASS
         .get_or_init(|| {
             SendSyncClass(unsafe {
-                let cls = objc_allocateClassPair(
-                    cls!("NSObject"),
-                    b"WindowerDelegate\0".as_ptr() as *const c_char,
-                    0,
-                );
+                let cls = objc_allocateClassPair(cls!("NSObject"), c"WindowerDelegate".as_ptr(), 0);
                 assert!(
                     !cls.is_null(),
                     "objc_allocateClassPair failed for WindowerDelegate"
@@ -379,31 +375,31 @@ fn get_delegate_class() -> Class {
 
                 class_addIvar(
                     cls,
-                    IVAR_STATE.as_ptr() as *const c_char,
+                    IVAR_STATE.as_ptr(),
                     std::mem::size_of::<usize>(),
                     std::mem::align_of::<usize>() as u8,
-                    b"^v\0".as_ptr() as *const c_char,
+                    c"^v".as_ptr(),
                 );
 
                 class_addMethod(
                     cls,
                     sel!("windowShouldClose:"),
                     delegate_window_should_close as usize as *mut c_void,
-                    b"c@:@\0".as_ptr() as *const c_char,
+                    c"c@:@".as_ptr(),
                 );
 
                 class_addMethod(
                     cls,
                     sel!("windowDidBecomeKey:"),
                     delegate_window_did_become_key as usize as *mut c_void,
-                    b"v@:@\0".as_ptr() as *const c_char,
+                    c"v@:@".as_ptr(),
                 );
 
                 class_addMethod(
                     cls,
                     sel!("windowDidResignKey:"),
                     delegate_window_did_resign_key as usize as *mut c_void,
-                    b"v@:@\0".as_ptr() as *const c_char,
+                    c"v@:@".as_ptr(),
                 );
 
                 objc_registerClassPair(cls);
@@ -430,11 +426,7 @@ fn get_view_class() -> Class {
     VIEW_CLASS
         .get_or_init(|| {
             SendSyncClass(unsafe {
-                let cls = objc_allocateClassPair(
-                    cls!("NSView"),
-                    b"WindowerView\0".as_ptr() as *const c_char,
-                    0,
-                );
+                let cls = objc_allocateClassPair(cls!("NSView"), c"WindowerView".as_ptr(), 0);
                 assert!(
                     !cls.is_null(),
                     "objc_allocateClassPair failed for WindowerView"
@@ -444,14 +436,14 @@ fn get_view_class() -> Class {
                     cls,
                     sel!("acceptsFirstResponder"),
                     view_accepts_first_responder as usize as *mut c_void,
-                    b"c@:\0".as_ptr() as *const c_char,
+                    c"c@:".as_ptr(),
                 );
 
                 class_addMethod(
                     cls,
                     sel!("keyDown:"),
                     view_key_down as usize as *mut c_void,
-                    b"v@:@\0".as_ptr() as *const c_char,
+                    c"v@:@".as_ptr(),
                 );
 
                 objc_registerClassPair(cls);
@@ -586,7 +578,7 @@ impl PlatformWindow {
 
             let state = Arc::new(Mutex::new(PlatformState { events: Vec::new() }));
             let state_ptr = Arc::as_ptr(&state) as *mut c_void;
-            object_setInstanceVariable(delegate, IVAR_STATE.as_ptr() as *const c_char, state_ptr);
+            object_setInstanceVariable(delegate, IVAR_STATE.as_ptr(), state_ptr);
 
             msg1(window, sel!("setDelegate:"), delegate);
 
@@ -1009,11 +1001,7 @@ impl PlatformWindow {
 impl Drop for PlatformWindow {
     fn drop(&mut self) {
         unsafe {
-            object_setInstanceVariable(
-                self.delegate,
-                IVAR_STATE.as_ptr() as *const c_char,
-                std::ptr::null_mut(),
-            );
+            object_setInstanceVariable(self.delegate, IVAR_STATE.as_ptr(), std::ptr::null_mut());
             msg0(self.window, sel!("close"));
             msg0(self.run_loop_mode, sel!("release"));
         }
