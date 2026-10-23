@@ -1,4 +1,4 @@
-//! macOS Cocoa/AppKit platform backend.
+﻿//! macOS Cocoa/AppKit platform backend.
 //!
 //! Uses the Objective-C runtime and AppKit/CoreGraphics frameworks directly
 //! (zero external Rust dependencies).
@@ -454,10 +454,11 @@ pub struct PlatformWindow {
     state: Arc<Mutex<PlatformState>>,
     width: u32,
     height: u32,
-    pub gl_ctx: *mut c_void,
+    pub gl_ctx: std::sync::atomic::AtomicPtr<c_void>,
 }
 
 unsafe impl Send for PlatformWindow {}
+unsafe impl Sync for PlatformWindow {}
 
 impl PlatformWindow {
     pub fn new(config: &WindowConfig) -> Result<Self> {
@@ -561,7 +562,7 @@ impl PlatformWindow {
             msg1(window, sel!("setContentView:"), view);
             msg1(window, sel!("makeFirstResponder:"), view);
 
-            msg1_bool(window, sel!("setacceptsmousemovedevents:"), yes);
+            msg1_bool(window, sel!("setAcceptsMouseMovedEvents:"), YES);
 
             let delegate_cls = get_delegate_class();
             let delegate = msg0(msg0(delegate_cls, sel!("alloc")), sel!("init"));
@@ -597,7 +598,7 @@ impl PlatformWindow {
                 state,
                 width: bounds.size.width as u32,
                 height: bounds.size.height as u32,
-                gl_ctx: std::ptr::null_mut(),
+                gl_ctx: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
             })
         }
     }

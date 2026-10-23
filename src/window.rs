@@ -1,4 +1,4 @@
-use crate::config::WindowConfig;
+﻿use crate::config::WindowConfig;
 use crate::error::Result;
 use crate::event::{ControlFlow, Event};
 use crate::platform::PlatformWindow;
@@ -47,16 +47,22 @@ pub mod win_gl {
 
     /// Try `wglGetProcAddress` first, then fall back to the static export from
     /// `opengl32.dll` for core functions that WGL doesn't expose.
+    ///
+    /// # Safety
+    /// `name` must be a valid null-terminated C string.
     pub unsafe fn get_proc_address(name: *const i8) -> *const c_void {
+        // SAFETY: Calling wglGetProcAddress with valid C string pointer.
         let p = unsafe { wglGetProcAddress(name) };
         if !p.is_null() && p as isize != 1 && p as isize != 2 && p as isize != 3 && p as isize != -1
         {
             return p;
         }
-        let module = unsafe { GetModuleHandleA(b"opengl32.dll\0".as_ptr() as *const i8) };
+        // SAFETY: Loading opengl32.dll module handle and resolving export.
+        let module = unsafe { GetModuleHandleA(c"opengl32.dll".as_ptr()) };
         if module.is_null() {
             return std::ptr::null();
         }
+        // SAFETY: Calling GetProcAddress with valid module handle and symbol name.
         unsafe { GetProcAddress(module, name) }
     }
 
@@ -132,21 +138,33 @@ pub mod glx {
 pub mod cgl {
     use std::ffi::{c_char, c_void};
 
+    /// Get the current CGL context.
+    ///
+    /// # Safety
+    /// Must be called on a thread where an OpenGL context has been made current.
     pub unsafe fn get_current_context() -> *mut c_void {
         #[link(name = "OpenGL", kind = "framework")]
         unsafe extern "C" {
             fn CGLGetCurrentContext() -> *mut c_void;
         }
+        // SAFETY: CGLGetCurrentContext returns the current context or null.
         unsafe { CGLGetCurrentContext() }
     }
 
+    /// # Safety
+    /// `name` must be a null-terminated C string.
     pub unsafe fn get_proc_address(name: *const c_char) -> *const c_void {
-        crate::buffer::macos_get_proc_address(name)
+        // SAFETY: Delegating to macos_get_proc_address with valid C string.
+        unsafe { crate::buffer::macos_get_proc_address(name) }
     }
 
     /// Flush the current `NSOpenGLContext` by messaging it via the ObjC runtime.
+    ///
+    /// # Safety
+    /// `ctx` must be a valid, retained `NSOpenGLContext*`.
     pub unsafe fn flush_buffer(ctx: *mut c_void) {
-        crate::buffer::macos_flush_buffer(ctx)
+        // SAFETY: Delegating to macos_flush_buffer with valid context pointer.
+        unsafe { crate::buffer::macos_flush_buffer(ctx) }
     }
 }
 
@@ -165,6 +183,8 @@ impl Window {
     pub fn run<F: FnMut(Event, &Self) -> ControlFlow>(&mut self, mut callback: F) -> Result<()> {
         let self_ptr = self as *const Self;
         self.inner.run(|event| {
+            // SAFETY: The Window instance outlives the event loop run call and is not mutated
+            // during the callback execution.
             let window_ref = unsafe { &*self_ptr };
             callback(event, window_ref)
         })
@@ -202,16 +222,19 @@ impl Window {
     /// Must be called from the same thread that will issue GL commands.
     pub unsafe fn create_gl_context(&self) {
         #[cfg(target_os = "linux")]
+        // SAFETY: Platform specific context creation requires matching thread affinity.
         unsafe {
             self.create_gl_context_linux()
         }
 
         #[cfg(target_os = "windows")]
+        // SAFETY: Win32 context creation on current thread.
         unsafe {
             self.create_gl_context_windows()
         }
 
         #[cfg(target_os = "macos")]
+        // SAFETY: AppKit/Cocoa context creation on main thread.
         unsafe {
             self.create_gl_context_macos()
         }
@@ -224,9 +247,9 @@ impl Window {
     /// # Safety
     /// An OpenGL context must have been created via [`Self::create_gl_context`]
     /// and must still be current on this thread.
-
     pub unsafe fn swap_buffers(&self) {
         #[cfg(target_os = "linux")]
+        // SAFETY: SwapBuffers called on active GLX context and window drawable.
         unsafe {
             use glx::glXSwapBuffers;
             let (display, xid) = self.linux_display_xid();
@@ -234,6 +257,7 @@ impl Window {
         }
 
         #[cfg(target_os = "windows")]
+        // SAFETY: Win32 SwapBuffers on window DC.
         unsafe {
             use win_gl::{GetDC, SwapBuffers};
             let hwnd = self.win32_hwnd();
@@ -242,8 +266,9 @@ impl Window {
         }
 
         #[cfg(target_os = "macos")]
+        // SAFETY: macOS CGL flush on active context.
         unsafe {
-            let ctx = self.inner.gl_ctx;
+            let ctx = self.inner.gl_ctx.load(std::sync::atomic::Ordering::Relaxed);
             if !ctx.is_null() {
                 cgl::flush_buffer(ctx);
             }
@@ -251,21 +276,27 @@ impl Window {
     }
 
     pub fn get_proc_address(&self, name: &str) -> *const c_void {
-        let cname = CString::new(name).expect("GL function name contained a null byte");
+        let Ok(cname) = CString::new(name) else {
+            return std::ptr::null();
+        };
 
         #[cfg(target_os = "linux")]
+        // SAFETY: Calling glXGetProcAddress with valid C string.
         return unsafe { glx::glXGetProcAddress(cname.as_ptr() as *const u8) };
 
         #[cfg(target_os = "windows")]
+        // SAFETY: Calling win_gl::get_proc_address with valid C string.
         return unsafe { win_gl::get_proc_address(cname.as_ptr()) };
 
         #[cfg(target_os = "macos")]
+        // SAFETY: Calling cgl::get_proc_address with valid C string.
         return unsafe { cgl::get_proc_address(cname.as_ptr()) };
     }
 
     pub fn test_gl(&self) {
         #[cfg(target_os = "linux")]
         {
+            // SAFETY: Checking current GLX context.
             let ctx = unsafe { glx::glXGetCurrentContext() };
             if ctx.is_null() {
                 #[cfg(feature = "log")]
@@ -278,6 +309,7 @@ impl Window {
 
         #[cfg(target_os = "windows")]
         {
+            // SAFETY: Checking current WGL context.
             let ctx = unsafe { win_gl::wglGetCurrentContext() };
             if ctx.is_null() {
                 #[cfg(feature = "log")]
@@ -290,6 +322,7 @@ impl Window {
 
         #[cfg(target_os = "macos")]
         {
+            // SAFETY: Checking current CGL context.
             let ctx = unsafe { cgl::get_current_context() };
             if ctx.is_null() {
                 #[cfg(feature = "log")]
@@ -301,26 +334,29 @@ impl Window {
         }
 
         type GlGetString = unsafe extern "C" fn(name: u32) -> *const u8;
-        let get_string: GlGetString = unsafe {
+        let get_string: GlGetString = {
             let ptr = self.get_proc_address("glGetString");
             if ptr.is_null() {
-                #[cfg(feature = "probably_fine_log")]
+                #[cfg(feature = "log")]
                 info!("[windowed] glGetString not found — context may not be current");
                 return;
             }
-            std::mem::transmute(ptr)
+            // SAFETY: Function pointer signature matches OpenGL glGetString standard.
+            unsafe { std::mem::transmute(ptr) }
         };
 
         // GL_VERSION = 0x1F02
+        // SAFETY: Calling glGetString with GL_VERSION enum value.
         let version = unsafe { get_string(0x1F02) };
         if version.is_null() {
             #[cfg(feature = "log")]
-            info!("glGetString(GL_VERSION) returned null — context may not be current")
+            info!("glGetString(GL_VERSION) returned null — context may not be current");
         } else {
-            #[cfg(feature = "log")]
+            // SAFETY: glGetString returns a null-terminated static C string.
             let s = unsafe { std::ffi::CStr::from_ptr(version as *const i8) };
             #[cfg(feature = "log")]
             info!("OpenGL version: {}", s.to_string_lossy());
+            let _ = s;
         }
     }
 
@@ -334,15 +370,18 @@ impl Window {
 
         // GLX_RGBA=4, GLX_DOUBLEBUFFER=5, GLX_DEPTH_SIZE=12 → 24, terminator
         let attribs: [i32; 5] = [4, 5, 12, 24, 0];
+        // SAFETY: glXChooseVisual with valid display and attrib array.
         let visual = unsafe { glXChooseVisual(display, 0, attribs.as_ptr()) };
         assert!(
             !visual.is_null(),
             "glXChooseVisual failed — check GLX support"
         );
 
+        // SAFETY: Creating direct context on visual.
         let ctx = unsafe { glXCreateContext(display, visual, std::ptr::null_mut(), 1) };
         assert!(!ctx.is_null(), "glXCreateContext failed");
 
+        // SAFETY: Making context current on display and drawable.
         let ok = unsafe { glXMakeCurrent(display, xid, ctx) };
         assert!(ok != 0, "glXMakeCurrent failed");
     }
@@ -362,6 +401,7 @@ impl Window {
                     error!(
                         "XlibDisplayHandle.display is None — falling back to XOpenDisplay(NULL) ($DISPLAY)"
                     );
+                    // SAFETY: Opening default display connection.
                     let d = unsafe { glx::XOpenDisplay(std::ptr::null()) };
                     assert!(!d.is_null(), "XOpenDisplay(NULL) failed — is $DISPLAY set?");
                     d
@@ -387,6 +427,7 @@ impl Window {
         use win_gl::*;
 
         let hwnd = self.win32_hwnd();
+        // SAFETY: Getting device context for HWND.
         let hdc = unsafe { GetDC(hwnd) };
         assert!(!hdc.is_null(), "GetDC failed");
 
@@ -419,12 +460,14 @@ impl Window {
             dw_damage_mask: 0,
         };
 
+        // SAFETY: Choosing and setting pixel format for HDC.
         let fmt = unsafe { ChoosePixelFormat(hdc, &pfd) };
         assert!(fmt != 0, "ChoosePixelFormat failed");
 
         let ok = unsafe { SetPixelFormat(hdc, fmt, &pfd) };
         assert!(ok != 0, "SetPixelFormat failed");
 
+        // SAFETY: Creating WGL context and making it current.
         let hglrc = unsafe { wglCreateContext(hdc) };
         assert!(!hglrc.is_null(), "wglCreateContext failed");
 
@@ -445,7 +488,7 @@ impl Window {
     }
 
     #[cfg(target_os = "macos")]
-    unsafe fn create_gl_context_macos(&mut self) {
+    unsafe fn create_gl_context_macos(&self) {
         use std::ffi::c_void;
 
         type id = *mut c_void;
@@ -472,21 +515,21 @@ impl Window {
         }
 
         let msg0 = |recv: id, sel: SEL| -> id {
-            let f: unsafe extern "C" fn(id, SEL) -> id = std::mem::transmute(objc_msgSend as usize);
+            let f: unsafe extern "C" fn(id, SEL) -> id = unsafe { std::mem::transmute(objc_msgSend as usize) };
             unsafe { f(recv, sel) }
         };
         let msg1 = |recv: id, sel: SEL, a: id| -> id {
             let f: unsafe extern "C" fn(id, SEL, id) -> id =
-                std::mem::transmute(objc_msgSend as usize);
+                unsafe { std::mem::transmute(objc_msgSend as usize) };
             unsafe { f(recv, sel, a) }
         };
         let msg1_bool = |recv: id, sel: SEL, a: BOOL| {
-            let f: unsafe extern "C" fn(id, SEL, BOOL) = std::mem::transmute(objc_msgSend as usize);
+            let f: unsafe extern "C" fn(id, SEL, BOOL) = unsafe { std::mem::transmute(objc_msgSend as usize) };
             unsafe { f(recv, sel, a) }
         };
         let msg_init_pf = |recv: id, sel: SEL, attrs: id| -> id {
             let f: unsafe extern "C" fn(id, SEL, id) -> id =
-                std::mem::transmute(objc_msgSend as usize);
+                unsafe { std::mem::transmute(objc_msgSend as usize) };
             unsafe { f(recv, sel, attrs) }
         };
 
@@ -496,7 +539,7 @@ impl Window {
         let array = msg0(msg0(ns_array_cls, sel!("alloc")), sel!("init"));
         for &a in &attrs {
             let f: unsafe extern "C" fn(id, SEL, u32) -> id =
-                std::mem::transmute(objc_msgSend as usize);
+                unsafe { std::mem::transmute(objc_msgSend as usize) };
             let num = unsafe { f(cls!("NSNumber"), sel!("numberWithUnsignedInt:"), a) };
             let _ = ns_number_cls;
             msg1(array, sel!("addObject:"), num);
@@ -512,7 +555,7 @@ impl Window {
         let ctx_alloc = msg0(cls!("NSOpenGLContext"), sel!("alloc"));
         let ctx = {
             let f: unsafe extern "C" fn(id, SEL, id, id) -> id =
-                std::mem::transmute(objc_msgSend as usize);
+                unsafe { std::mem::transmute(objc_msgSend as usize) };
             unsafe {
                 f(
                     ctx_alloc,
@@ -540,7 +583,7 @@ impl Window {
         );
         msg0(ctx, sel!("makeCurrentContext"));
 
-        self.inner.gl_ctx = ctx;
+        self.inner.gl_ctx.store(ctx, std::sync::atomic::Ordering::Relaxed);
     }
 }
 

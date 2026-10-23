@@ -1,4 +1,4 @@
-//! Linux / X11 platform backend.
+﻿//! Linux / X11 platform backend.
 #![allow(
     non_camel_case_types,
     non_snake_case,
@@ -710,7 +710,7 @@ impl HasWindowHandle for PlatformWindow {
 
 impl HasDisplayHandle for PlatformWindow {
     fn display_handle(&self) -> std::result::Result<DisplayHandle<'_>, HandleError> {
-        let ptr = NonNull::new(self.display).expect("display is null");
+        let ptr = NonNull::new(self.display).ok_or(HandleError::Unavailable)?;
         let h = XlibDisplayHandle::new(Some(ptr), self.screen);
         Ok(unsafe { DisplayHandle::borrow_raw(RawDisplayHandle::Xlib(h)) })
     }

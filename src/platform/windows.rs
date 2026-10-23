@@ -1,4 +1,4 @@
-//! Windows Win32 platform backend.
+﻿//! Windows Win32 platform backend.
 #![allow(
     non_camel_case_types,
     non_snake_case,
@@ -7,6 +7,7 @@
 )]
 
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::config::WindowConfig;
@@ -34,11 +35,14 @@ type LONG = i32;
 type LONG_PTR = isize;
 
 #[repr(C)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 struct POINT {
     x: LONG,
     y: LONG,
 }
+
 #[repr(C)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 struct RECT {
     left: LONG,
     top: LONG,
@@ -229,6 +233,7 @@ unsafe extern "system" {
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetModuleHandleW(lpModuleName: *const u16) -> HINSTANCE;
+    fn GetLastError() -> DWORD;
 }
 
 #[link(name = "gdi32")]
@@ -239,7 +244,7 @@ unsafe extern "system" {
 type HMONITOR = isize;
 
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug, Default)]
 struct WINDOWPLACEMENT {
     length: UINT,
     flags: UINT,
@@ -273,19 +278,25 @@ struct WindowState {
     tracking_mouse: bool,
 }
 
-pub struct PlatformWindow {
-    hwnd: HWND,
-    hinstance: HINSTANCE,
-    state: Arc<Mutex<WindowState>>,
-    width: u32,
-    height: u32,
+#[derive(Default)]
+struct FullscreenState {
     fullscreen: bool,
-    mouse_grabbed: bool,
     saved_style: DWORD,
     saved_placement: WINDOWPLACEMENT,
 }
 
+pub struct PlatformWindow {
+    hwnd: HWND,
+    hinstance: HINSTANCE,
+    state: Arc<Mutex<WindowState>>,
+    fullscreen_state: Mutex<FullscreenState>,
+    mouse_grabbed: AtomicBool,
+    width: AtomicU32,
+    height: AtomicU32,
+}
+
 unsafe impl Send for PlatformWindow {}
+unsafe impl Sync for PlatformWindow {}
 
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
@@ -293,10 +304,13 @@ unsafe extern "system" fn wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // SAFETY: GetWindowLongPtrW retrieves the pointer to Arc<Mutex<WindowState>> stored
+    // during window creation. If null or during teardown, DefWindowProcW is called safely.
     let state_ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const Mutex<WindowState> };
     if state_ptr.is_null() {
         return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     }
+    // SAFETY: state_ptr points to the Arc<Mutex<WindowState>> which outlives the HWND.
     let state = unsafe { &*state_ptr };
 
     macro_rules! push {
@@ -321,6 +335,7 @@ unsafe extern "system" fn wnd_proc(
             0
         }
         WM_DESTROY => {
+            // SAFETY: PostQuitMessage instructs the message loop to quit.
             unsafe { PostQuitMessage(0) };
             0
         }
@@ -338,20 +353,18 @@ unsafe extern "system" fn wnd_proc(
         }
 
         WM_PAINT => {
-            let mut ps: PAINTSTRUCT = unsafe { std::mem::zeroed() };
-            unsafe { BeginPaint(hwnd, &mut ps) };
-            push!(Event::RedrawRequested);
-            unsafe { EndPaint(hwnd, &ps) };
+            // SAFETY: Standard Win32 BeginPaint/EndPaint pair.
+            unsafe {
+                let mut ps: PAINTSTRUCT = std::mem::zeroed();
+                BeginPaint(hwnd, &mut ps);
+                push!(Event::RedrawRequested);
+                EndPaint(hwnd, &ps);
+            }
             0
         }
 
         WM_KEYDOWN | WM_SYSKEYDOWN => {
-            // Bit 30 of lParam: 1 if key was already down before this message (auto-repeat).
-            let repeat = (lparam >> 30) & 1 != 0;
-            push!(Event::KeyDown {
-                key: vk_to_key(wparam as u16),
-                repeat,
-            });
+            push!(Event::KeyDown(vk_to_key(wparam as u16)));
             0
         }
         WM_KEYUP | WM_SYSKEYUP => {
@@ -361,27 +374,26 @@ unsafe extern "system" fn wnd_proc(
 
         WM_CHAR => {
             let cp = wparam as u32;
-            if cp >= 0x20 {
-                if let Some(ch) = char::from_u32(cp) {
-                    push!(Event::CharInput(ch));
-                }
+            if cp >= 0x20
+                && let Some(ch) = char::from_u32(cp) {
+                push!(Event::CharInput(ch));
             }
             0
         }
 
         WM_MOUSEMOVE => {
-            if let Ok(mut s) = state.lock() {
-                if !s.tracking_mouse {
-                    s.tracking_mouse = true;
-                    let mut tme = TRACKMOUSEEVENT {
-                        cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as DWORD,
-                        dwFlags: TME_LEAVE | TME_HOVER,
-                        hwndTrack: hwnd,
-                        dwHoverTime: 1,
-                    };
-                    unsafe { TrackMouseEvent(&mut tme) };
-                    s.events.push(Event::CursorEntered);
-                }
+            if let Ok(mut s) = state.lock()
+                && !s.tracking_mouse {
+                s.tracking_mouse = true;
+                let mut tme = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as DWORD,
+                    dwFlags: TME_LEAVE | TME_HOVER,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 1,
+                };
+                // SAFETY: TrackMouseEvent request is passed a valid pointer to TRACKMOUSEEVENT.
+                unsafe { TrackMouseEvent(&mut tme) };
+                s.events.push(Event::CursorEntered);
             }
             let (x, y) = mouse_xy!(lparam);
             push!(Event::MouseMove { x, y });
@@ -467,64 +479,77 @@ unsafe extern "system" fn wnd_proc(
             0
         }
 
+        // SAFETY: DefWindowProcW handles all unhandled window messages.
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
 
 impl PlatformWindow {
     pub fn new(config: &WindowConfig) -> Result<Self> {
-        unsafe {
-            let hinstance = GetModuleHandleW(std::ptr::null());
-            if hinstance == 0 {
-                return Err(Error::Platform("GetModuleHandleW failed".into()));
+        // SAFETY: Retrieving module handle for current process.
+        let hinstance = unsafe { GetModuleHandleW(std::ptr::null()) };
+        if hinstance == 0 {
+            return Err(Error::Platform("GetModuleHandleW failed".into()));
+        }
+
+        let class_name = to_wide("windowed_wc");
+        // SAFETY: Standard stock objects and cursor loading.
+        let hcursor = unsafe { LoadCursorW(0, IDC_ARROW) };
+        let hbrush = unsafe { GetStockObject(WHITE_BRUSH) };
+
+        let wc = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as UINT,
+            style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
+            lpfnWndProc: Some(wnd_proc),
+            cbClsExtra: 0,
+            cbWndExtra: 0,
+            hInstance: hinstance,
+            hIcon: 0,
+            hCursor: hcursor,
+            hbrBackground: hbrush,
+            lpszMenuName: std::ptr::null(),
+            lpszClassName: class_name.as_ptr(),
+            hIconSm: 0,
+        };
+        // SAFETY: RegisterClassExW registers the window class for the process.
+        let atom = unsafe { RegisterClassExW(&wc) };
+        if atom == 0 {
+            const ERROR_CLASS_ALREADY_EXISTS: DWORD = 1410;
+            // SAFETY: Calling GetLastError to verify if registration failed due to duplicate class name.
+            let err = unsafe { GetLastError() };
+            if err != ERROR_CLASS_ALREADY_EXISTS {
+                return Err(Error::Platform(format!("RegisterClassExW failed: {err}")));
             }
+        }
 
-            let class_name = to_wide("windowed_wc\0");
-            let hcursor = LoadCursorW(0, IDC_ARROW);
-            let hbrush = GetStockObject(WHITE_BRUSH);
+        let style: DWORD = if config.resizable {
+            WS_OVERLAPPEDWINDOW
+        } else {
+            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+        };
 
-            let wc = WNDCLASSEXW {
-                cbSize: std::mem::size_of::<WNDCLASSEXW>() as UINT,
-                style: CS_HREDRAW | CS_VREDRAW | CS_OWNDC,
-                lpfnWndProc: Some(wnd_proc),
-                cbClsExtra: 0,
-                cbWndExtra: 0,
-                hInstance: hinstance,
-                hIcon: 0,
-                hCursor: hcursor,
-                hbrBackground: hbrush,
-                lpszMenuName: std::ptr::null(),
-                lpszClassName: class_name.as_ptr(),
-                hIconSm: 0,
-            };
-            RegisterClassExW(&wc);
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: config.width as LONG,
+            bottom: config.height as LONG,
+        };
+        // SAFETY: AdjustWindowRect calculates window bounds required for desired client size.
+        unsafe { AdjustWindowRect(&mut rect, style, 0) };
 
-            let style: DWORD = if config.resizable {
-                WS_OVERLAPPEDWINDOW
-            } else {
-                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
-            };
+        let (cx, cy) = config
+            .position
+            .unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
 
-            let mut rect = RECT {
-                left: 0,
-                top: 0,
-                right: config.width as LONG,
-                bottom: config.height as LONG,
-            };
-            AdjustWindowRect(&mut rect, style, 0);
+        let title = to_wide(&config.title);
+        let state = Arc::new(Mutex::new(WindowState {
+            events: Vec::new(),
+            tracking_mouse: false,
+        }));
 
-            let (cx, cy) = config
-                .position
-                .map(|(x, y)| (x, y))
-                .unwrap_or((CW_USEDEFAULT, CW_USEDEFAULT));
-
-            let title = to_wide(&format!("{}\0", config.title));
-            let state = Arc::new(Mutex::new(WindowState {
-                events: Vec::new(),
-                tracking_mouse: false,
-            }));
-
-            let hwnd = CreateWindowExW(
+        // SAFETY: CreateWindowExW creates the top-level window.
+        let hwnd = unsafe {
+            CreateWindowExW(
                 0,
                 class_name.as_ptr(),
                 title.as_ptr(),
@@ -537,27 +562,35 @@ impl PlatformWindow {
                 0,
                 hinstance,
                 std::ptr::null_mut(),
-            );
-            if hwnd == 0 {
-                return Err(Error::Platform("CreateWindowExW failed".into()));
-            }
+            )
+        };
+        if hwnd == 0 {
+            return Err(Error::Platform("CreateWindowExW failed".into()));
+        }
 
+        // SAFETY: We attach the state Arc pointer to GWLP_USERDATA so wnd_proc can access it.
+        unsafe {
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Arc::as_ptr(&state) as LONG_PTR);
             ShowWindow(hwnd, SW_SHOW);
             UpdateWindow(hwnd);
-
-            Ok(Self {
-                hwnd,
-                hinstance,
-                state,
-                width: config.width,
-                height: config.height,
-                fullscreen: false,
-                mouse_grabbed: false,
-                saved_style: 0,
-                saved_placement: unsafe { std::mem::zeroed() },
-            })
         }
+
+        let initial_fullscreen = config.fullscreen;
+        let pw = Self {
+            hwnd,
+            hinstance,
+            state,
+            fullscreen_state: Mutex::new(FullscreenState::default()),
+            mouse_grabbed: AtomicBool::new(false),
+            width: AtomicU32::new(config.width),
+            height: AtomicU32::new(config.height),
+        };
+
+        if initial_fullscreen {
+            pw.set_fullscreen(true);
+        }
+
+        Ok(pw)
     }
 
     pub fn run<F: FnMut(Event) -> ControlFlow>(&mut self, mut callback: F) -> Result<()> {
@@ -565,6 +598,7 @@ impl PlatformWindow {
         let mut polling = false;
 
         loop {
+            // SAFETY: PeekMessageW pumps pending messages from the Win32 message queue.
             unsafe {
                 while PeekMessageW(&mut msg, 0, 0, 0, PM_REMOVE) != 0 {
                     if msg.message == WM_QUIT {
@@ -576,15 +610,15 @@ impl PlatformWindow {
             }
 
             let events: Vec<Event> = {
-                let mut s = self.state.lock().unwrap();
+                let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
                 std::mem::take(&mut s.events)
             };
 
             let mut want_poll = false;
             for event in events {
                 if let Event::Resized { width, height } = event {
-                    self.width = width;
-                    self.height = height;
+                    self.width.store(width, Ordering::Relaxed);
+                    self.height.store(height, Ordering::Relaxed);
                 }
                 match callback(event) {
                     ControlFlow::Exit => return Ok(()),
@@ -608,12 +642,14 @@ impl PlatformWindow {
     }
 
     pub fn request_redraw(&self) {
+        // SAFETY: InvalidateRect marks client rectangle as needing redraw.
         unsafe {
             InvalidateRect(self.hwnd, std::ptr::null(), 0);
         }
     }
 
     pub fn set_cursor_visible(&self, visible: bool) {
+        // SAFETY: ShowCursor increments/decrements cursor display counter.
         unsafe {
             if visible {
                 while ShowCursor(1) < 0 {}
@@ -624,44 +660,43 @@ impl PlatformWindow {
     }
 
     pub fn warp_mouse(&self, x: i32, y: i32) {
+        // SAFETY: ClientToScreen converts window-relative coordinates to screen coordinates,
+        // and SetCursorPos moves the cursor.
         unsafe {
-            let mut wr: RECT = std::mem::zeroed();
-            let mut cr: RECT = std::mem::zeroed();
-            GetWindowRect(self.hwnd, &mut wr);
-            GetClientRect(self.hwnd, &mut cr);
-            let border_x = (wr.right - wr.left - cr.right) / 2;
-            let top_inset = wr.bottom - wr.top - cr.bottom - border_x;
-            SetCursorPos(wr.left + border_x + x, wr.top + top_inset + y);
+            let mut pt = POINT { x, y };
+            ClientToScreen(self.hwnd, &mut pt);
+            SetCursorPos(pt.x, pt.y);
         }
     }
 
     pub fn set_title(&self, title: &str) {
-        let t = to_wide(&format!("{title}\0"));
+        let t = to_wide(title);
+        // SAFETY: SetWindowTextW sets the window title string.
         unsafe {
             SetWindowTextW(self.hwnd, t.as_ptr());
         }
     }
 
-    pub fn set_fullscreen(&mut self, is_fullscreen: bool) {
-        if self.fullscreen == is_fullscreen {
+    pub fn set_fullscreen(&self, is_fullscreen: bool) {
+        let mut fs = self.fullscreen_state.lock().unwrap_or_else(|e| e.into_inner());
+        if fs.fullscreen == is_fullscreen {
             return;
         }
-        self.fullscreen = is_fullscreen;
+        fs.fullscreen = is_fullscreen;
+
+        // SAFETY: Standard Win32 fullscreen transition via style change and window placement.
         unsafe {
             if is_fullscreen {
-                // Save current style and window placement so we can restore later.
-                self.saved_style = GetWindowLongW(self.hwnd, GWL_STYLE) as DWORD;
-                self.saved_placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as UINT;
-                GetWindowPlacement(self.hwnd, &mut self.saved_placement);
+                fs.saved_style = GetWindowLongW(self.hwnd, GWL_STYLE) as DWORD;
+                fs.saved_placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as UINT;
+                GetWindowPlacement(self.hwnd, &mut fs.saved_placement);
 
-                // Get the bounds of the monitor the window is currently on.
                 let monitor = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
                 let mut mi: MONITORINFO = std::mem::zeroed();
                 mi.cbSize = std::mem::size_of::<MONITORINFO>() as DWORD;
                 GetMonitorInfoW(monitor, &mut mi);
                 let r = mi.rcMonitor;
 
-                // Strip all chrome and cover the full monitor rectangle.
                 SetWindowLongW(self.hwnd, GWL_STYLE, (WS_POPUP | WS_VISIBLE) as LONG);
                 SetWindowPos(
                     self.hwnd,
@@ -673,8 +708,7 @@ impl PlatformWindow {
                     SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
                 );
             } else {
-                // Restore the previous style and placement.
-                SetWindowLongW(self.hwnd, GWL_STYLE, self.saved_style as LONG);
+                SetWindowLongW(self.hwnd, GWL_STYLE, fs.saved_style as LONG);
                 SetWindowPos(
                     self.hwnd,
                     HWND_TOP,
@@ -684,20 +718,19 @@ impl PlatformWindow {
                     0,
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED,
                 );
-                SetWindowPlacement(self.hwnd, &self.saved_placement);
+                SetWindowPlacement(self.hwnd, &fs.saved_placement);
             }
         }
     }
 
-    pub fn set_mouse_grabbed(&mut self, grabbed: bool) {
-        if self.mouse_grabbed == grabbed {
+    pub fn set_mouse_grabbed(&self, grabbed: bool) {
+        if self.mouse_grabbed.swap(grabbed, Ordering::SeqCst) == grabbed {
             return;
         }
-        self.mouse_grabbed = grabbed;
+        // SAFETY: Win32 SetCapture and ClipCursor confine or release the cursor.
         unsafe {
             if grabbed {
                 SetCapture(self.hwnd);
-                // Confine the cursor to the client area.
                 let mut rect: RECT = std::mem::zeroed();
                 GetClientRect(self.hwnd, &mut rect);
                 let mut tl = POINT {
@@ -725,12 +758,17 @@ impl PlatformWindow {
     }
 
     pub fn inner_size(&self) -> (u32, u32) {
-        (self.width, self.height)
+        (
+            self.width.load(Ordering::Relaxed),
+            self.height.load(Ordering::Relaxed),
+        )
     }
 }
 
 impl Drop for PlatformWindow {
     fn drop(&mut self) {
+        // SAFETY: Clear GWLP_USERDATA so subsequent message callbacks cannot access
+        // freed state, then destroy the window.
         unsafe {
             SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
             DestroyWindow(self.hwnd);
@@ -744,12 +782,14 @@ impl HasWindowHandle for PlatformWindow {
         let hwnd_val = NonZeroIsize::new(self.hwnd).ok_or(HandleError::Unavailable)?;
         let mut h = Win32WindowHandle::new(hwnd_val);
         h.hinstance = NonZeroIsize::new(self.hinstance);
+        // SAFETY: The HWND and HINSTANCE are valid for the lifetime of self.
         Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Win32(h)) })
     }
 }
 
 impl HasDisplayHandle for PlatformWindow {
     fn display_handle(&self) -> std::result::Result<DisplayHandle<'_>, HandleError> {
+        // SAFETY: Windows display handle requires no OS-specific pointer.
         Ok(unsafe {
             DisplayHandle::borrow_raw(RawDisplayHandle::Windows(WindowsDisplayHandle::new()))
         })
@@ -757,7 +797,7 @@ impl HasDisplayHandle for PlatformWindow {
 }
 
 fn to_wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().collect()
+    s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 fn vk_to_key(vk: u16) -> Key {

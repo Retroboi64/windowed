@@ -14,7 +14,7 @@
 //!
 //! fn main() -> windowed::Result<()> {
 //!     let mut window = Window::new(WindowConfig::new("Hello").size(800, 600))?;
-//!     window.run(|event| match event {
+//!     window.run(|event, _window| match event {
 //!         Event::CloseRequested         => ControlFlow::Exit,
 //!         Event::KeyDown(Key::Escape)   => ControlFlow::Exit,
 //!         _                             => ControlFlow::Continue,
@@ -45,7 +45,7 @@ mod tests {
         let config = WindowConfig::new("test").size(800, 600);
         assert_eq!(config.width, 800);
         assert_eq!(config.height, 600);
-        assert_eq!(config.resizable, true);
+        assert!(config.resizable);
     }
 
     #[test]

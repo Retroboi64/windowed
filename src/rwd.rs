@@ -123,6 +123,11 @@ pub struct WindowHandle<'a> {
 }
 
 impl<'a> WindowHandle<'a> {
+    /// Borrow a raw window handle.
+    ///
+    /// # Safety
+    /// The caller must ensure that `raw` represents a valid window handle that
+    /// remains valid for lifetime `'a'`.
     pub unsafe fn borrow_raw(raw: RawWindowHandle) -> Self {
         Self {
             raw,
@@ -141,6 +146,11 @@ pub struct DisplayHandle<'a> {
 }
 
 impl<'a> DisplayHandle<'a> {
+    /// Borrow a raw display handle.
+    ///
+    /// # Safety
+    /// The caller must ensure that `raw` represents a valid display handle that
+    /// remains valid for lifetime `'a'`.
     pub unsafe fn borrow_raw(raw: RawDisplayHandle) -> Self {
         Self {
             raw,
