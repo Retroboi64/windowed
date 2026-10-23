@@ -1,4 +1,4 @@
-//! Low-level buffer-swap helpers for OpenGL.
+﻿//! Low-level buffer-swap helpers for OpenGL.
 //!
 //! These are `pub(crate)` building blocks consumed by [`crate::window::Window::swap_buffers`].
 //! Most users should call that method rather than using this module directly.
@@ -22,7 +22,7 @@ unsafe extern "system" {
 
 /// # Safety
 /// `ctx` must be a valid, retained `NSOpenGLContext*`.
-#[cfg(all(feature = "opengl", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 pub unsafe fn macos_flush_buffer(ctx: *mut std::ffi::c_void) {
     use std::ffi::c_char;
     #[link(name = "objc")]
@@ -31,19 +31,21 @@ pub unsafe fn macos_flush_buffer(ctx: *mut std::ffi::c_void) {
         fn objc_msgSend(
             recv: *mut std::ffi::c_void,
             sel: *mut std::ffi::c_void,
+            ...
         ) -> *mut std::ffi::c_void;
     }
-    let sel = sel_registerName(b"flushBuffer\0".as_ptr() as *const c_char);
+    // SAFETY: Registering selector and sending flushBuffer message to context.
+    let sel = unsafe { sel_registerName(b"flushBuffer\0".as_ptr() as *const c_char) };
     let f: unsafe extern "C" fn(*mut std::ffi::c_void, *mut std::ffi::c_void) =
-        std::mem::transmute(objc_msgSend as usize);
-    f(ctx, sel);
+        unsafe { std::mem::transmute(objc_msgSend as *const () as usize) };
+    unsafe { f(ctx, sel) };
 }
 
 /// Resolve an OpenGL symbol from the system OpenGL framework on macOS.
 ///
 /// # Safety
 /// `name` must be a null-terminated C string.
-#[cfg(all(feature = "opengl", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 pub unsafe fn macos_get_proc_address(name: *const std::ffi::c_char) -> *const std::ffi::c_void {
     use std::ffi::c_int;
     #[link(name = "dl")]
@@ -54,13 +56,18 @@ pub unsafe fn macos_get_proc_address(name: *const std::ffi::c_char) -> *const st
             symbol: *const std::ffi::c_char,
         ) -> *const std::ffi::c_void;
     }
-    static GL_HANDLE: std::sync::OnceLock<*mut std::ffi::c_void> = std::sync::OnceLock::new();
+    static GL_HANDLE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     let handle = GL_HANDLE.get_or_init(|| {
-        dlopen(
-            b"/System/Library/Frameworks/OpenGL.framework/OpenGL\0".as_ptr()
-                as *const std::ffi::c_char,
-            1,
-        )
+        // SAFETY: dlopen system OpenGL framework on macOS.
+        let ptr = unsafe {
+            dlopen(
+                b"/System/Library/Frameworks/OpenGL.framework/OpenGL\0".as_ptr()
+                    as *const std::ffi::c_char,
+                1,
+            )
+        };
+        ptr as usize
     });
-    dlsym(*handle, name)
+    // SAFETY: Resolving symbol via dlsym.
+    unsafe { dlsym(*handle as *mut std::ffi::c_void, name) }
 }

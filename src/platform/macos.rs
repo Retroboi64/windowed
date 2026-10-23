@@ -7,14 +7,18 @@
 //! and driven from the main thread; this is not enforced at compile time.
 
 #![allow(
+    unsafe_op_in_unsafe_fn,
+    unused_unsafe,
+    function_casts_as_integer,
     non_upper_case_globals,
+    non_camel_case_types,
     non_snake_case,
     dead_code,
     clippy::upper_case_acronyms,
     clippy::too_many_arguments
 )]
 
-use std::ffi::{c_char, c_double, c_int, c_void};
+use std::ffi::{c_char, c_double, c_void};
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -352,10 +356,15 @@ unsafe extern "C" fn delegate_window_did_resign_key(this: id, _cmd: SEL, _notif:
     }
 }
 
-static DELEGATE_CLASS: OnceLock<Class> = OnceLock::new();
+#[derive(Copy, Clone)]
+struct SendSyncClass(Class);
+unsafe impl Send for SendSyncClass {}
+unsafe impl Sync for SendSyncClass {}
+
+static DELEGATE_CLASS: OnceLock<SendSyncClass> = OnceLock::new();
 
 fn get_delegate_class() -> Class {
-    *DELEGATE_CLASS.get_or_init(|| unsafe {
+    DELEGATE_CLASS.get_or_init(|| SendSyncClass(unsafe {
         let cls = objc_allocateClassPair(
             cls!("NSObject"),
             b"WindowerDelegate\0".as_ptr() as *const c_char,
@@ -397,7 +406,7 @@ fn get_delegate_class() -> Class {
 
         objc_registerClassPair(cls);
         cls
-    })
+    })).0
 }
 
 // ─── View subclass ────────────────────────────────────────────────────────────
@@ -411,10 +420,10 @@ unsafe extern "C" fn view_accepts_first_responder(_this: id, _cmd: SEL) -> BOOL 
 unsafe extern "C" fn view_key_down(_this: id, _cmd: SEL, _event: id) { /* swallow — no beep */
 }
 
-static VIEW_CLASS: OnceLock<Class> = OnceLock::new();
+static VIEW_CLASS: OnceLock<SendSyncClass> = OnceLock::new();
 
 fn get_view_class() -> Class {
-    *VIEW_CLASS.get_or_init(|| unsafe {
+    VIEW_CLASS.get_or_init(|| SendSyncClass(unsafe {
         let cls = objc_allocateClassPair(
             cls!("NSView"),
             b"WindowerView\0".as_ptr() as *const c_char,
@@ -441,7 +450,7 @@ fn get_view_class() -> Class {
 
         objc_registerClassPair(cls);
         cls
-    })
+    })).0
 }
 
 // ─── PlatformWindow ───────────────────────────────────────────────────────────
@@ -1011,7 +1020,7 @@ impl HasDisplayHandle for PlatformWindow {
 }
 
 unsafe fn view_bounds(view: id) -> NSRect {
-    msg0_rect(view, sel!("bounds"))
+    unsafe { msg0_rect(view, sel!("bounds")) }
 }
 
 fn keycode_to_key(code: u16) -> Key {

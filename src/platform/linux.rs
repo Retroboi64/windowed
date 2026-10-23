@@ -432,11 +432,21 @@ pub struct PlatformWindow {
 }
 
 unsafe impl Send for PlatformWindow {}
+unsafe impl Sync for PlatformWindow {}
 
 impl PlatformWindow {
     pub fn new(config: &WindowConfig) -> Result<Self> {
         let display = unsafe { XOpenDisplay(std::ptr::null()) };
         if display.is_null() {
+            if let Ok(wayland_disp) = std::env::var("WAYLAND_DISPLAY") {
+                if !wayland_disp.is_empty() {
+                    return Err(Error::Platform(format!(
+                        "could not open X11 display. A Wayland session was detected \
+                         (WAYLAND_DISPLAY={wayland_disp}), but native Wayland is not yet supported. \
+                         Please ensure Xwayland is running with DISPLAY set."
+                    )));
+                }
+            }
             return Err(Error::NoDisplay);
         }
 
@@ -550,28 +560,54 @@ impl PlatformWindow {
         })
     }
 
-    pub fn run<F: FnMut(Event) -> ControlFlow>(&mut self, mut callback: F) -> Result<()> {
-        loop {
-            while unsafe { XPending(self.display) } > 0 {
-                let mut ev: XEvent = unsafe { std::mem::zeroed() };
-                unsafe { XNextEvent(self.display, &mut ev) };
-                if let Some(event) = self.translate_event(&ev) {
-                    match callback(event) {
-                        ControlFlow::Exit => return Ok(()),
-                        ControlFlow::WarpAndPoll(x, y) => self.warp_mouse(x, y),
-                        ControlFlow::Poll | ControlFlow::Continue => {}
+    pub fn pump_events<F: FnMut(Event) -> ControlFlow>(
+        &mut self,
+        mut callback: F,
+    ) -> Result<ControlFlow> {
+        let mut cf = ControlFlow::Continue;
+        // SAFETY: Querying and processing pending X11 events without blocking.
+        while unsafe { XPending(self.display) } > 0 {
+            let mut ev: XEvent = unsafe { std::mem::zeroed() };
+            unsafe { XNextEvent(self.display, &mut ev) };
+            if let Some(event) = self.translate_event(&ev) {
+                match callback(event) {
+                    ControlFlow::Exit => return Ok(ControlFlow::Exit),
+                    ControlFlow::WarpAndPoll(x, y) => {
+                        self.warp_mouse(x, y);
+                        cf = ControlFlow::Poll;
                     }
+                    ControlFlow::Poll => cf = ControlFlow::Poll,
+                    ControlFlow::Wait => cf = ControlFlow::Wait,
+                    ControlFlow::Continue => {}
                 }
             }
+        }
+        Ok(cf)
+    }
 
-            match callback(Event::RedrawRequested) {
+    pub fn run<F: FnMut(Event) -> ControlFlow>(&mut self, mut callback: F) -> Result<()> {
+        let mut flow = ControlFlow::Continue;
+        loop {
+            let res = self.pump_events(&mut callback)?;
+            match res {
                 ControlFlow::Exit => return Ok(()),
-                ControlFlow::WarpAndPoll(x, y) => self.warp_mouse(x, y),
-                ControlFlow::Poll | ControlFlow::Continue => {}
+                ControlFlow::Poll | ControlFlow::WarpAndPoll(_, _) => flow = ControlFlow::Poll,
+                ControlFlow::Wait => flow = ControlFlow::Wait,
+                ControlFlow::Continue => {}
             }
 
-            unsafe { XFlush(self.display) };
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            if flow == ControlFlow::Poll {
+                match callback(Event::RedrawRequested) {
+                    ControlFlow::Exit => return Ok(()),
+                    ControlFlow::WarpAndPoll(x, y) => self.warp_mouse(x, y),
+                    _ => {}
+                }
+                unsafe { XFlush(self.display) };
+                std::thread::yield_now();
+            } else {
+                unsafe { XFlush(self.display) };
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
         }
     }
 
@@ -599,12 +635,33 @@ impl PlatformWindow {
                     None
                 }
             }
-            KEY_PRESS => Some(Event::KeyDown(x11_keycode_to_key(
-                unsafe { ev.key.keycode } as u8,
-            ))),
-            KEY_RELEASE => Some(Event::KeyUp(x11_keycode_to_key(
-                unsafe { ev.key.keycode } as u8
-            ))),
+            KEY_PRESS => {
+                let state = unsafe { ev.key.state };
+                let modifiers = Modifiers {
+                    shift: (state & 1) != 0,
+                    ctrl: (state & 4) != 0,
+                    alt: (state & 8) != 0,
+                    super_key: (state & 64) != 0,
+                };
+                Some(Event::KeyDown {
+                    key: x11_keycode_to_key(unsafe { ev.key.keycode } as u8),
+                    repeat: false,
+                    modifiers,
+                })
+            }
+            KEY_RELEASE => {
+                let state = unsafe { ev.key.state };
+                let modifiers = Modifiers {
+                    shift: (state & 1) != 0,
+                    ctrl: (state & 4) != 0,
+                    alt: (state & 8) != 0,
+                    super_key: (state & 64) != 0,
+                };
+                Some(Event::KeyUp {
+                    key: x11_keycode_to_key(unsafe { ev.key.keycode } as u8),
+                    modifiers,
+                })
+            }
             BUTTON_PRESS => {
                 let (btn, x, y) = unsafe { (ev.button.button, ev.button.x, ev.button.y) };
                 match btn {
@@ -699,6 +756,117 @@ impl PlatformWindow {
             );
             XFlush(self.display);
         }
+    }
+
+    pub fn set_size(&self, width: u32, height: u32) {
+        unsafe {
+            XResizeWindow(self.display, self.window, width as c_uint, height as c_uint);
+            XFlush(self.display);
+        }
+    }
+
+    pub fn set_position(&self, x: i32, y: i32) {
+        unsafe {
+            XMoveWindow(self.display, self.window, x as c_int, y as c_int);
+            XFlush(self.display);
+        }
+    }
+
+    pub fn set_visible(&self, visible: bool) {
+        unsafe {
+            if visible {
+                XMapWindow(self.display, self.window);
+            } else {
+                XUnmapWindow(self.display, self.window);
+            }
+            XFlush(self.display);
+        }
+    }
+
+    pub fn minimize(&self) {
+        unsafe {
+            XIconifyWindow(self.display, self.window, self.screen);
+            XFlush(self.display);
+        }
+    }
+
+    pub fn maximize(&self) {
+        let net_wm_state = intern_atom(self.display, b"_NET_WM_STATE\0");
+        let max_vert = intern_atom(self.display, b"_NET_WM_STATE_MAXIMIZED_VERT\0");
+        let max_horz = intern_atom(self.display, b"_NET_WM_STATE_MAXIMIZED_HORZ\0");
+        let root = unsafe { XRootWindow(self.display, self.screen) };
+
+        let mut ev: XEvent = unsafe { std::mem::zeroed() };
+        unsafe {
+            ev.client_message.type_ = CLIENT_MESSAGE;
+            ev.client_message.window = self.window;
+            ev.client_message.message_type = net_wm_state;
+            ev.client_message.format = 32;
+            ev.client_message.data[0] = 1;
+            ev.client_message.data[1] = max_vert as c_long;
+            ev.client_message.data[2] = max_horz as c_long;
+            ev.client_message.data[3] = 1;
+            ev.client_message.data[4] = 0;
+
+            XSendEvent(
+                self.display,
+                root,
+                0,
+                SUBSTRUCTURE_REDIRECT_MASK | SUBSTRUCTURE_NOTIFY_MASK,
+                &mut ev,
+            );
+            XFlush(self.display);
+        }
+    }
+
+    pub fn set_cursor_grab(&self, grab: bool) {
+        unsafe {
+            if grab {
+                XGrabPointer(
+                    self.display,
+                    self.window,
+                    1,
+                    (BUTTON_PRESS_MASK | BUTTON_RELEASE_MASK | POINTER_MOTION_MASK) as c_uint,
+                    1,
+                    1,
+                    self.window,
+                    0,
+                    0,
+                );
+            } else {
+                XUngrabPointer(self.display, 0);
+            }
+            XFlush(self.display);
+        }
+    }
+
+    pub fn set_clipboard_text(&self, text: &str) -> Result<()> {
+        let clipboard = intern_atom(self.display, b"CLIPBOARD\0");
+        let utf8_string = intern_atom(self.display, b"UTF8_STRING\0");
+        let bytes = text.as_bytes();
+        unsafe {
+            XChangeProperty(
+                self.display,
+                self.window,
+                clipboard,
+                utf8_string,
+                8,
+                PROP_MODE_REPLACE,
+                bytes.as_ptr() as *const c_void,
+                bytes.len() as c_int,
+            );
+            XSetSelectionOwner(self.display, clipboard, self.window, 0);
+            XFlush(self.display);
+        }
+        Ok(())
+    }
+
+    pub fn get_clipboard_text(&self) -> Result<String> {
+        Ok(String::new())
+    }
+
+    pub fn scale_factor(&self) -> f64 {
+        1.0
     }
 
     pub fn inner_size(&self) -> (u32, u32) {
