@@ -839,3 +839,34 @@ fn x11_keycode_to_key(code: u8) -> Key {
         _ => Key::Unknown,
     }
 }
+
+#[cfg(feature = "raw-window-handle")]
+impl PlatformWindow {
+    pub fn window_handle_rwh(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+        let mut h = ::raw_window_handle::XlibWindowHandle::new(self.window);
+        h.visual_id = 0;
+        // SAFETY: XID remains valid for lifetime of self.
+        Ok(unsafe { ::raw_window_handle::WindowHandle::borrow_raw(::raw_window_handle::RawWindowHandle::Xlib(h)) })
+    }
+
+    pub fn display_handle_rwh(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
+        let ptr = NonNull::new(self.display).ok_or(::raw_window_handle::HandleError::Unavailable)?;
+        let h = ::raw_window_handle::XlibDisplayHandle::new(Some(ptr), self.screen);
+        // SAFETY: Display connection remains valid for lifetime of self.
+        Ok(unsafe { ::raw_window_handle::DisplayHandle::borrow_raw(::raw_window_handle::RawDisplayHandle::Xlib(h)) })
+    }
+}
+
+#[cfg(feature = "raw-window-handle")]
+impl ::raw_window_handle::HasWindowHandle for PlatformWindow {
+    fn window_handle(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+        self.window_handle_rwh()
+    }
+}
+
+#[cfg(feature = "raw-window-handle")]
+impl ::raw_window_handle::HasDisplayHandle for PlatformWindow {
+    fn display_handle(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
+        self.display_handle_rwh()
+    }
+}

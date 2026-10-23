@@ -645,3 +645,17 @@ impl HasDisplayHandle for Window {
         self.inner.display_handle()
     }
 }
+
+#[cfg(feature = "raw-window-handle")]
+impl ::raw_window_handle::HasWindowHandle for Window {
+    fn window_handle(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+        self.inner.window_handle_rwh()
+    }
+}
+
+#[cfg(feature = "raw-window-handle")]
+impl ::raw_window_handle::HasDisplayHandle for Window {
+    fn display_handle(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
+        self.inner.display_handle_rwh()
+    }
+}

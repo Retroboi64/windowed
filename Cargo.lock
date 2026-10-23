@@ -41,11 +41,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83c9428518145f4ea4c83d150d3537520b8b049538e6f670ca406219594ab670"
 
 [[package]]
+name = "raw-window-handle"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
+
+[[package]]
 name = "windowed"
 version = "0.3.1"
 dependencies = [
  "gl",
  "probably_fine_log",
+ "raw-window-handle",
 ]
 
 [[package]]

@@ -1167,3 +1167,38 @@ fn vk_to_key(vk: u16) -> Key {
         _ => Key::Unknown,
     }
 }
+
+#[cfg(feature = "raw-window-handle")]
+impl PlatformWindow {
+    pub fn window_handle_rwh(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+        use std::num::NonZeroIsize;
+        let hwnd_val = NonZeroIsize::new(self.hwnd).ok_or(::raw_window_handle::HandleError::Unavailable)?;
+        let mut h = ::raw_window_handle::Win32WindowHandle::new(hwnd_val);
+        h.hinstance = NonZeroIsize::new(self.hinstance);
+        // SAFETY: HWND and HINSTANCE remain valid for lifetime of self.
+        Ok(unsafe { ::raw_window_handle::WindowHandle::borrow_raw(::raw_window_handle::RawWindowHandle::Win32(h)) })
+    }
+
+    pub fn display_handle_rwh(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
+        // SAFETY: Windows display handle is a unit struct with no state.
+        Ok(unsafe {
+            ::raw_window_handle::DisplayHandle::borrow_raw(::raw_window_handle::RawDisplayHandle::Windows(
+                ::raw_window_handle::WindowsDisplayHandle::new(),
+            ))
+        })
+    }
+}
+
+#[cfg(feature = "raw-window-handle")]
+impl ::raw_window_handle::HasWindowHandle for PlatformWindow {
+    fn window_handle(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+        self.window_handle_rwh()
+    }
+}
+
+#[cfg(feature = "raw-window-handle")]
+impl ::raw_window_handle::HasDisplayHandle for PlatformWindow {
+    fn display_handle(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
+        self.display_handle_rwh()
+    }
+}

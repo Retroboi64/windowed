@@ -1059,3 +1059,36 @@ fn keycode_to_key(code: u16) -> Key {
         _ => Key::Unknown,
     }
 }
+
+#[cfg(feature = "raw-window-handle")]
+impl PlatformWindow {
+    pub fn window_handle_rwh(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+        let ptr = NonNull::new(self.view).ok_or(::raw_window_handle::HandleError::Unavailable)?;
+        let h = ::raw_window_handle::AppKitWindowHandle::new(ptr);
+        // SAFETY: NSView pointer remains valid for lifetime of self.
+        Ok(unsafe { ::raw_window_handle::WindowHandle::borrow_raw(::raw_window_handle::RawWindowHandle::AppKit(h)) })
+    }
+
+    pub fn display_handle_rwh(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
+        // SAFETY: AppKit display handle is a unit struct with no state.
+        Ok(unsafe {
+            ::raw_window_handle::DisplayHandle::borrow_raw(::raw_window_handle::RawDisplayHandle::AppKit(
+                ::raw_window_handle::AppKitDisplayHandle::new(),
+            ))
+        })
+    }
+}
+
+#[cfg(feature = "raw-window-handle")]
+impl ::raw_window_handle::HasWindowHandle for PlatformWindow {
+    fn window_handle(&self) -> std::result::Result<::raw_window_handle::WindowHandle<'_>, ::raw_window_handle::HandleError> {
+        self.window_handle_rwh()
+    }
+}
+
+#[cfg(feature = "raw-window-handle")]
+impl ::raw_window_handle::HasDisplayHandle for PlatformWindow {
+    fn display_handle(&self) -> std::result::Result<::raw_window_handle::DisplayHandle<'_>, ::raw_window_handle::HandleError> {
+        self.display_handle_rwh()
+    }
+}
